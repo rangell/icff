@@ -255,7 +255,7 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
     return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
 
 
-def place_constraints(pred_tree, constraints, viable_placements):
+def place_constraints(constraints, viable_placements):
     # organize constraints nicely
     Xi = np.vstack(constraints)
 
@@ -299,7 +299,6 @@ def place_constraints(pred_tree, constraints, viable_placements):
     )
     compatible = False
     while len(soln_frontier) > 0:
-        print(len(soln_frontier))
         indices = uniqheappop(soln_frontier, in_frontier).indices
         prop_placements = [vp[indices[i]] 
             for i, vp in enumerate(viable_placements)]
@@ -308,7 +307,7 @@ def place_constraints(pred_tree, constraints, viable_placements):
         compat_check_iter = zip(*np.where(A > 0))
         incompat_pairs = []
         for i, j in compat_check_iter:
-            compatible = pred_tree.lca_check(
+            compatible = lca_check(
                 prop_placements[i][1], prop_placements[j][1]
             )
             if not compatible:
@@ -336,7 +335,7 @@ def place_constraints(pred_tree, constraints, viable_placements):
                 compatible = False
                 _iter = enumerate(viable_placements[j][indices[j]+1:])
                 for offset, hypo_place in _iter:
-                    compatible = pred_tree.lca_check(
+                    compatible = lca_check(
                         prop_placements[i][1], hypo_place[1]
                     )
                     if compatible:
@@ -385,7 +384,7 @@ def gen_constraint(gold_entities,
                    pred_tree_nodes,
                    sim_func,
                    num_to_generate=1):
-    constraints, viable_placements = [], []
+    constraints = []
     for _ in range(num_to_generate):
         # randomly generate valid feedback in the form of there-exists constraints
         pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
@@ -412,12 +411,8 @@ def gen_constraint(gold_entities,
             ff_constraint = (2*super_gold_ent - 1) * ff_mask
 
         constraints.append(ff_constraint)
-        compatible_nodes = constraint_compatible_nodes(
-            pred_tree_nodes, ff_constraint, sim_func
-        )
-        viable_placements.append(sorted(compatible_nodes, key=lambda x: -x[0]))
 
-    return constraints, viable_placements
+    return constraints
 
 
 def run_dummy_icff(gold_entities,
@@ -425,7 +420,7 @@ def run_dummy_icff(gold_entities,
                    mention_labels,
                    sim_func,
                    rounds=1):
-    constraints, viable_placements = [], []
+    constraints = []
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
@@ -438,22 +433,28 @@ def run_dummy_icff(gold_entities,
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
 
         # generate constraints and viable places given predictions
-        new_constraints, new_viable_places = gen_constraint(
+        new_constraints = gen_constraint(
             gold_entities, pred_canon_ents, pred_tree_nodes, sim_func
         )
+
+        # update constraints and viable placements
+        constraints.extend(new_constraints)
+        viable_placements = []
+        for xi in constraints:
+            compatible_nodes = constraint_compatible_nodes(
+                pred_tree_nodes, xi, sim_func
+            )
+            viable_placements.append(
+                    sorted(compatible_nodes, key=lambda x: -x[0])
+            )
+
+        # solve structured prediction problem of jointly placing the constraints
+        resolved_placements = place_constraints(constraints, viable_placements)
+        assert resolved_placements is not None
 
         embed()
         exit()
 
-        # update constraints and viable placements
-        constraints.extend(new_constraints)
-        viable_placements.extend(new_viable_places)
-
-        # solve structured prediction problem of jointly placing the constraints
-        resolved_placements = place_constraints(
-            pred_tree, constraints, viable_placements
-        )
-        assert resolved_placements is not None
 
         # TODO: project resolved constraint placements to leaves
 

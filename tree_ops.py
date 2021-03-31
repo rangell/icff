@@ -1,10 +1,10 @@
-
+import numpy as np
 
 
 def constraint_compatible_nodes(nodes, ff_constraint, sim_func):
     compatible_nodes = []
     for node in nodes:
-        feat_alignment = node.rep * ff_constraint
+        feat_alignment = node.raw_rep * ff_constraint
         num_overlap = np.sum(feat_alignment > 0)
         num_violate = np.sum(feat_alignment < 0)
         if num_violate == 0 and num_overlap > 0:
