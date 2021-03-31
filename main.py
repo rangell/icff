@@ -3,15 +3,20 @@ import copy
 import pickle
 import random
 from collections import defaultdict
-from functools import reduce
 from heapq import heappop, heappush, heapify
+from functools import reduce
 
-import higra as hg
-from higra.higram import HorizontalCutExplorer
 import numpy as np
 from scipy.sparse import csr_matrix, coo_matrix
 from scipy.cluster.hierarchy import fcluster
+from sklearn.metrics import adjusted_rand_score as adj_rand
+from sklearn.metrics import adjusted_mutual_info_score as adj_mi
 from sklearn.metrics.pairwise import cosine_similarity
+
+from metrics import dendrogram_purity
+from tree_ops import (constraint_compatible_nodes,
+                      lca_check)
+from tree_node import TreeNode
 
 from IPython import embed
 
@@ -22,74 +27,6 @@ DATA_FNAME = 'synth_data.pkl'
 # - add cmd line args
 # - add wandb for larger experiments
 # - 
-
-
-class InferredTree(object):
-
-    def __init__(self, nodes=[]):
-        self.nodes = nodes
-
-    def constraint_compatible_nodes(self, ff_constraint, sim_func):
-        compatible_nodes = []
-        for node in self.nodes:
-            feat_alignment = node.rep * ff_constraint
-            num_overlap = np.sum(feat_alignment > 0)
-            num_violate = np.sum(feat_alignment < 0)
-            if num_violate == 0 and num_overlap > 0:
-                affinity = sim_func(node.rep[None,:], ff_constraint[None,:])[0][0]
-                compatible_nodes.append((affinity, node))
-        return compatible_nodes
-
-    def lca_check(self, node1, node2):
-        nodes = sorted(
-            [(node1.uid, node1), (node2.uid, node2)],
-            key=lambda x: -x[0]
-        )
-        max_uid = nodes[0][0]
-
-        while nodes[1][0] < max_uid:
-            lower_node = nodes[1][1]
-            par = lower_node.parent
-            assert par is not None
-            if par.uid == max_uid:
-                return False
-            nodes[1] = (par.uid, par)
-            nodes = sorted(nodes, key=lambda x: -x[0])
-            
-        return True
-
-    
-class TreeNode(object):
-
-    def __init__(self, uid, raw_rep, transformed_rep=None, children=[]):
-        self.uid = uid
-        self.raw_rep = raw_rep
-        self.transformed_rep = raw_rep if transformed_rep is None else transformed_rep
-        self.children = children
-        self.parent = None
-
-        for child in self.children:
-            child.parent = self
-
-    def get_leaves(self):
-        if len(self.children) == 0:
-            return [self]
-        return reduce(
-            lambda a, b : a + b,
-            [c.get_leaves() for c in self.children]
-        )
-
-    def __repr__(self):
-        children_uids = str([c.uid for c in self.children])
-        parent_uid = self.parent.uid if self.parent is not None else 'None'
-
-        return "{" + "\n".join([
-            f"{'uid:':<25}{self.uid:<40}",
-            f" {'raw_rep:':<25}{str(self.raw_rep):<40}",
-            f" {'transformed_rep:':<25}{str(self.transformed_rep):<40}",
-            f" {'children:':<25}{children_uids:<40}",
-            f" {'parent:':<25}{parent_uid:<40}"
-        ]) + "}"
 
 
 ############################ DATA GENERATION ##################################
@@ -287,7 +224,7 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
         new_node_id += 1
 
     # find the best cut
-    cut_frontier_nodes, _ = get_opt_tree_cut(
+    cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
         pred_tree_nodes[-1].children, sim_func, constraints
     )
 
@@ -302,10 +239,20 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
         for x in n.get_leaves():
             pred_labels[x.uid] = i
     
-    embed()
-    exit()
 
-    return pred_canon_ents, pred_labels, pred_tree_nodes
+    # compute metrics
+    dp = dendrogram_purity(pred_tree_nodes, labels)
+    adj_rand_idx = adj_rand(pred_labels, labels)
+    adj_mut_info = adj_mi(pred_labels, labels)
+
+    metrics = {
+        'dp' : dp,
+        'adj_rand_idx' : adj_rand_idx,
+        'adj_mut_info' : adj_mut_info,
+        'cut_obj_score' : cut_obj_score
+    }
+
+    return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
 
 
 def place_constraints(pred_tree, constraints, viable_placements):
@@ -433,12 +380,16 @@ def place_constraints(pred_tree, constraints, viable_placements):
     return placements
 
 
-def gen_constraint(gold_entities, pred_entities, pred_tree, num_to_generate=1):
+def gen_constraint(gold_entities,
+                   pred_canon_ents,
+                   pred_tree_nodes,
+                   sim_func,
+                   num_to_generate=1):
     constraints, viable_placements = [], []
     for _ in range(num_to_generate):
         # randomly generate valid feedback in the form of there-exists constraints
-        pred_ent_idx = random.randint(0, len(pred_entities)-1)
-        ff_pred_ent = pred_entities[pred_ent_idx]
+        pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
+        ff_pred_ent = pred_canon_ents[pred_ent_idx]
         feat_intersect = (ff_pred_ent & gold_entities) == ff_pred_ent
         is_ent_subsets = np.all(feat_intersect, axis=1)
         num_ent_subsets = np.sum(is_ent_subsets)
@@ -449,7 +400,7 @@ def gen_constraint(gold_entities, pred_entities, pred_tree, num_to_generate=1):
             tgt_gold_ent = gold_entities[tgt_ent_idx]
             neg_match_feats = (feat_intersect[tgt_ent_idx] == False)
             while True:
-                ff_mask = np.random.randint(0, 2, size=super_gold_ent.size)
+                ff_mask = np.random.randint(0, 2, size=tgt_gold_ent.size)
                 if np.sum(neg_match_feats * ff_mask) > 0:
                     break
             ff_constraint = (2*tgt_gold_ent - 1) * ff_mask
@@ -461,8 +412,8 @@ def gen_constraint(gold_entities, pred_entities, pred_tree, num_to_generate=1):
             ff_constraint = (2*super_gold_ent - 1) * ff_mask
 
         constraints.append(ff_constraint)
-        compatible_nodes = pred_tree.constraint_compatible_nodes(
-            ff_constraint, sim_func
+        compatible_nodes = constraint_compatible_nodes(
+            pred_tree_nodes, ff_constraint, sim_func
         )
         viable_placements.append(sorted(compatible_nodes, key=lambda x: -x[0]))
 
@@ -481,17 +432,18 @@ def run_dummy_icff(gold_entities,
 
     for _ in range(rounds):
         # cluster the points
-        pred_canon_ents, pred_labels, pred_tree_nodes = cluster_points(
+        out = cluster_points(
             leaves, mention_labels, sim_func, constraints
+        )
+        pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
+
+        # generate constraints and viable places given predictions
+        new_constraints, new_viable_places = gen_constraint(
+            gold_entities, pred_canon_ents, pred_tree_nodes, sim_func
         )
 
         embed()
         exit()
-
-        # generate constraints and viable places given predictions
-        new_constraints, new_viable_places = gen_constraint(
-            gold_entities, pred_entities, pred_tree
-        )
 
         # update constraints and viable placements
         constraints.extend(new_constraints)
