@@ -59,11 +59,12 @@ class InferredTree(object):
         return True
 
     
-class InferredNode(object):
+class TreeNode(object):
 
-    def __init__(self, uid, rep, children=[]):
+    def __init__(self, uid, raw_rep, transformed_rep=None, children=[]):
         self.uid = uid
-        self.rep = rep
+        self.raw_rep = raw_rep
+        self.transformed_rep = raw_rep if transformed_rep is None else transformed_rep
         self.children = children
         self.parent = None
 
@@ -78,14 +79,17 @@ class InferredNode(object):
             [c.get_leaves() for c in self.children]
         )
 
-
     def __repr__(self):
-        return '<uid: {} - rep: {} - children: {} - parent: {}>'.format(
-            self.uid,
-            self.rep,
-            [c.uid for c in self.children],
-            self.parent.uid if self.parent is not None else 'None'
-        )
+        children_uids = str([c.uid for c in self.children])
+        parent_uid = self.parent.uid if self.parent is not None else 'None'
+
+        return "{" + "\n".join([
+            f"{'uid:':<25}{self.uid:<40}",
+            f" {'raw_rep:':<25}{str(self.raw_rep):<40}",
+            f" {'transformed_rep:':<25}{str(self.transformed_rep):<40}",
+            f" {'children:':<25}{children_uids:<40}",
+            f" {'parent:':<25}{parent_uid:<40}"
+        ]) + "}"
 
 
 ############################ DATA GENERATION ##################################
@@ -206,47 +210,102 @@ def custom_hac(points, sim_func):
     return Z
 
 
-def cluster_points(points, labels, sim_func):
+def cut_objective(cut_frontier, sim_func, constraints):
+    # trying to maximize the value produced by this function
+
+    def expected_sim(reps):
+        if reps.shape[0] == 1:
+            return 0.0
+        sim_mx = np.triu(sim_func(reps, reps) + 1e-8, k=1)
+        return np.mean(sim_mx[sim_mx > 0])
+
+    # compute expected external cluster sim
+    extern_cluster_reps = np.vstack([n.transformed_rep for n in cut_frontier])
+    extern_cluster_sim = expected_sim(extern_cluster_reps)
+
+    # compute expected internal cluster sim
+    intern_cluster_sims = []
+    for n in cut_frontier:
+        intern_cluster_reps = np.vstack(
+            [l.transformed_rep for l in n.get_leaves()]
+        )
+        intern_cluster_sims.append(expected_sim(intern_cluster_reps))
+    intern_cluster_sim = np.mean(intern_cluster_sims)
+
+    # before constraints
+    obj_val = np.exp(intern_cluster_sim - extern_cluster_sim)
+
+    # TODO: incorporate constraint violation + attr add penalty
+
+    ## track the cuts we're evaluating
+    #print(str(obj_val) + '\n' + str(cut_frontier))
+
+    return obj_val
+
+
+def get_opt_tree_cut(cut_frontier, sim_func, constraints):
+    max_cut = cut_frontier
+    max_cut_score = cut_objective(cut_frontier, sim_func, constraints)
+    for i, node in enumerate(cut_frontier):
+        if len(node.children) > 0:
+            alter_cut_front = cut_frontier[:i]\
+                              + node.children\
+                              + cut_frontier[i+1:]
+            alter_cut, alter_cut_score = get_opt_tree_cut(
+                alter_cut_front, sim_func, constraints
+            )
+            if alter_cut_score > max_cut_score:
+                max_cut = alter_cut
+                max_cut_score = alter_cut_score
+
+    return max_cut, max_cut_score
+
+
+def cluster_points(leaf_nodes, labels, sim_func, constraints):
+    # pull out all of the points
+    points = np.vstack([x.transformed_rep for x in leaf_nodes])
     num_points = points.shape[0]
 
     # run clustering and produce the linkage matrix
     Z = custom_hac(points, sim_func)
-    altitudes = Z[:,2]
-    cut_idx = np.argmin(np.diff(altitudes)) + 1 # cut after this merge idx
-    
-    # compute the predicted tree
-    inferred_nodes = [InferredNode(i, r) for i, r in enumerate(points)]
+
+    # build the tree
+    pred_tree_nodes = copy.deepcopy(leaf_nodes)
     new_node_id = num_points
-    assert new_node_id == len(inferred_nodes)
+    assert new_node_id == len(pred_tree_nodes)
     for merge_idx, merger in enumerate(Z):
         lchild, rchild = int(merger[0]), int(merger[1])
-        inferred_nodes.append(
-            InferredNode(
+        pred_tree_nodes.append(
+            TreeNode(
                 new_node_id,
-                inferred_nodes[lchild].rep | inferred_nodes[rchild].rep,
-                children=[inferred_nodes[lchild], inferred_nodes[rchild]]
+                pred_tree_nodes[lchild].raw_rep | pred_tree_nodes[rchild].raw_rep,
+                transformed_rep=(pred_tree_nodes[lchild].transformed_rep
+                                | pred_tree_nodes[rchild].transformed_rep),
+                children=[pred_tree_nodes[lchild], pred_tree_nodes[rchild]]
             )
         )
         new_node_id += 1
 
-        # compute the pred labels at the cut
-        if merge_idx == cut_idx:
-            forest_roots = [x for x in inferred_nodes if x.parent is None]
-            leaf2parent = {
-                leaf.uid : root.uid 
-                    for root in forest_roots for leaf in root.get_leaves()
-            }
-            pred_labels = [leaf2parent[i] for i in range(num_points)]
+    # find the best cut
+    cut_frontier_nodes, _ = get_opt_tree_cut(
+        pred_tree_nodes[-1].children, sim_func, constraints
+    )
 
-    pred_tree = InferredTree(nodes=inferred_nodes)
+    # the predicted entities canonicalization
+    pred_canon_ents = np.vstack(
+        [n.transformed_rep for n in cut_frontier_nodes]
+    )
 
-    # compute the predicted entities 
-    pred_entities_map = defaultdict(lambda : np.zeros_like(points[0]))
-    for i, idx in enumerate(pred_labels):
-        pred_entities_map[idx] |= points[i]
-    pred_entities = np.asarray(list(pred_entities_map.values()))
+    # produce the predicted labels for leaves
+    pred_labels = np.zeros_like(labels)
+    for i, n in enumerate(cut_frontier_nodes):
+        for x in n.get_leaves():
+            pred_labels[x.uid] = i
+    
+    embed()
+    exit()
 
-    return pred_entities, pred_tree
+    return pred_canon_ents, pred_labels, pred_tree_nodes
 
 
 def place_constraints(pred_tree, constraints, viable_placements):
@@ -374,33 +433,9 @@ def place_constraints(pred_tree, constraints, viable_placements):
     return placements
 
 
-if __name__ == '__main__':
-
-    # fix this with command line args later
-    seed = 27
-    random.seed(seed)
-    np.random.seed(seed)
-
-    # get or create the synthetic data
-    if not os.path.exists(DATA_FNAME):
-        with open(DATA_FNAME, 'wb') as f:
-            gold_entities, mentions, mention_labels = gen_data(2, 10, 16)
-            pickle.dump((gold_entities, mentions, mention_labels), f)
-    else:
-        with open(DATA_FNAME, 'rb') as f:
-            gold_entities, mentions, mention_labels = pickle.load(f)
-
-    # declare similarity function
-    sim_func = _cos_sim
-
-    # cluster the points
-    pred_entities, pred_tree = cluster_points(
-        mentions, mention_labels, sim_func
-    )
-
-    # TESTING: generate a bunch of valid constraints
+def gen_constraint(gold_entities, pred_entities, pred_tree, num_to_generate=1):
     constraints, viable_placements = [], []
-    for i in range(25):
+    for _ in range(num_to_generate):
         # randomly generate valid feedback in the form of there-exists constraints
         pred_ent_idx = random.randint(0, len(pred_entities)-1)
         ff_pred_ent = pred_entities[pred_ent_idx]
@@ -425,22 +460,76 @@ if __name__ == '__main__':
             ff_mask = np.random.randint(0, 2, size=super_gold_ent.size)
             ff_constraint = (2*super_gold_ent - 1) * ff_mask
 
+        constraints.append(ff_constraint)
         compatible_nodes = pred_tree.constraint_compatible_nodes(
             ff_constraint, sim_func
         )
-
-        constraints.append(ff_constraint)
         viable_placements.append(sorted(compatible_nodes, key=lambda x: -x[0]))
 
-    # solve structured prediction problem of jointly placing the constraints
-    resolved_placements = place_constraints(
-        pred_tree, constraints, viable_placements
-    )
-    assert resolved_placements is not None
+    return constraints, viable_placements
+
+
+def run_dummy_icff(gold_entities,
+                   mentions,
+                   mention_labels,
+                   sim_func,
+                   rounds=1):
+    constraints, viable_placements = [], []
+
+    # construct tree node objects for leaves
+    leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
+
+    for _ in range(rounds):
+        # cluster the points
+        pred_canon_ents, pred_labels, pred_tree_nodes = cluster_points(
+            leaves, mention_labels, sim_func, constraints
+        )
+
+        embed()
+        exit()
+
+        # generate constraints and viable places given predictions
+        new_constraints, new_viable_places = gen_constraint(
+            gold_entities, pred_entities, pred_tree
+        )
+
+        # update constraints and viable placements
+        constraints.extend(new_constraints)
+        viable_placements.extend(new_viable_places)
+
+        # solve structured prediction problem of jointly placing the constraints
+        resolved_placements = place_constraints(
+            pred_tree, constraints, viable_placements
+        )
+        assert resolved_placements is not None
+
+        # TODO: project resolved constraint placements to leaves
 
     embed()
     exit()
 
 
-    constraint_leaves = max_compatible_node.get_leaves()
+def main():
+    # fix this with command line args later
+    seed = 27
+    random.seed(seed)
+    np.random.seed(seed)
 
+    # get or create the synthetic data
+    if not os.path.exists(DATA_FNAME):
+        with open(DATA_FNAME, 'wb') as f:
+            gold_entities, mentions, mention_labels = gen_data(2, 10, 16)
+            pickle.dump((gold_entities, mentions, mention_labels), f)
+    else:
+        with open(DATA_FNAME, 'rb') as f:
+            gold_entities, mentions, mention_labels = pickle.load(f)
+
+    # declare similarity function
+    sim_func = _cos_sim
+
+    # run the core function
+    run_dummy_icff(gold_entities, mentions, mention_labels, sim_func)
+
+
+if __name__ == '__main__':
+    main()
