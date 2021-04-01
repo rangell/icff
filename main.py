@@ -13,9 +13,9 @@ from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
 from sklearn.metrics.pairwise import cosine_similarity
 
+from match import match_constraints, lca_check, viable_match_check
 from metrics import dendrogram_purity
-from tree_ops import (constraint_compatible_nodes,
-                      lca_check)
+from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
 
 from IPython import embed
@@ -148,11 +148,13 @@ def custom_hac(points, sim_func):
 
 
 def cut_objective(cut_frontier, sim_func, constraints):
-    # trying to maximize the value produced by this function
+    """ trying to maximize the value produced by this function. """
+
+    # single cluster case
+    if len(cut_frontier) < 2:
+        return -np.inf
 
     def expected_sim(reps):
-        if reps.shape[0] == 1:
-            return 0.0
         sim_mx = np.triu(sim_func(reps, reps) + 1e-8, k=1)
         return np.mean(sim_mx[sim_mx > 0])
 
@@ -166,16 +168,44 @@ def cut_objective(cut_frontier, sim_func, constraints):
         intern_cluster_reps = np.vstack(
             [l.transformed_rep for l in n.get_leaves()]
         )
+        if intern_cluster_reps.shape[0] == 1:
+            continue
         intern_cluster_sims.append(expected_sim(intern_cluster_reps))
+
+    # all singletons case
+    if len(intern_cluster_sims) < 1:
+        return -np.inf
+
+    # o.w.
     intern_cluster_sim = np.mean(intern_cluster_sims)
 
     # before constraints
-    obj_val = np.exp(intern_cluster_sim - extern_cluster_sim)
+    log_obj_val = intern_cluster_sim - extern_cluster_sim
 
     # TODO: incorporate constraint violation + attr add penalty
+    if len(constraints) > 0:
+        viable_assigns = []
+        for xi in constraints:
+            local_viable_assigns = []
+            for sub_cluster in cut_frontier:
+                if np.all((sub_cluster.raw_rep * xi) > 0):
+                    assign_aff = (np.sum(xi == sub_cluster.raw_rep)
+                                  / np.sum(xi > 0))
+                    local_viable_assigns.append((assign_aff, sub_cluster))
+            viable_assigns.append(local_viable_assigns)
+        
+        # TODO: we have a matching problem between constraints and cut_frontier
+        match_assignments = match_constraints(
+            constraints, viable_assigns, viable_match_check
+        )
+
+        embed()
+        exit()
 
     ## track the cuts we're evaluating
     #print(str(obj_val) + '\n' + str(cut_frontier))
+
+    obj_val = np.exp(log_obj_val)
 
     return obj_val
 
@@ -419,22 +449,26 @@ def run_dummy_icff(gold_entities,
                    mentions,
                    mention_labels,
                    sim_func,
-                   rounds=1):
+                   rounds=3):
     constraints = []
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
-    for _ in range(rounds):
+    for r in range(rounds):
         # cluster the points
         out = cluster_points(
             leaves, mention_labels, sim_func, constraints
         )
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
 
+        # TODO: add logger to print metrics
+
+        # TODO: add check to see if perfect clustering is returned
+
         # generate constraints and viable places given predictions
         new_constraints = gen_constraint(
-            gold_entities, pred_canon_ents, pred_tree_nodes, sim_func
+            gold_entities, pred_canon_ents, pred_tree_nodes, sim_func, num_to_generate=10
         )
 
         # update constraints and viable placements
@@ -449,17 +483,19 @@ def run_dummy_icff(gold_entities,
             )
 
         # solve structured prediction problem of jointly placing the constraints
-        resolved_placements = place_constraints(constraints, viable_placements)
+        resolved_placements = match_constraints(
+                constraints, viable_placements, lca_check
+        )
         assert resolved_placements is not None
 
         # reset all leaf transformed_rep's
         for node in leaves:
-            node.transformed_rep = node.raw_rep
+            node.transformed_rep = copy.deepcopy(node.raw_rep)
 
         # project resolved constraint placements to leaves
-        for xi, rp in zip(constraint, resolved_placements):
-            embed()
-            exit()
+        for xi, rp in zip(constraints, resolved_placements):
+            for node in rp.get_leaves():
+                node.transformed_rep |= xi
 
 
     embed()

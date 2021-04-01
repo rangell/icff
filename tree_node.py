@@ -1,3 +1,4 @@
+import copy
 from functools import reduce
 
 
@@ -5,8 +6,11 @@ class TreeNode(object):
 
     def __init__(self, uid, raw_rep, transformed_rep=None, children=[]):
         self.uid = uid
-        self.raw_rep = raw_rep
-        self.transformed_rep = raw_rep if transformed_rep is None else transformed_rep
+        self.raw_rep = copy.deepcopy(raw_rep)
+        self.transformed_rep = (
+                copy.deepcopy(raw_rep) if transformed_rep is None
+                    else copy.deepcopy(transformed_rep)
+        )
         self.children = children
         self.parent = None
 
