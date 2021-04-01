@@ -452,11 +452,15 @@ def run_dummy_icff(gold_entities,
         resolved_placements = place_constraints(constraints, viable_placements)
         assert resolved_placements is not None
 
-        embed()
-        exit()
+        # reset all leaf transformed_rep's
+        for node in leaves:
+            node.transformed_rep = node.raw_rep
 
+        # project resolved constraint placements to leaves
+        for xi, rp in zip(constraint, resolved_placements):
+            embed()
+            exit()
 
-        # TODO: project resolved constraint placements to leaves
 
     embed()
     exit()
