@@ -1,5 +1,9 @@
+import copy
+from collections import defaultdict
 from heapq import heappop, heappush
 import numpy as np
+
+from IPython import embed
 
 
 class Frontier(object):
@@ -32,7 +36,11 @@ def uniqheappop(heap, inheap):
     return frontier
 
 
-def match_constraints(constraints, viable_assigns, compat_fn):
+def match_constraints(constraints,
+                      viable_assigns,
+                      compat_fn,
+                      allow_no_match=False):
+
     # organize constraints nicely
     Xi = np.vstack(constraints)
 
@@ -50,11 +58,21 @@ def match_constraints(constraints, viable_assigns, compat_fn):
     compatible = False
     while len(soln_frontier) > 0:
         indices = uniqheappop(soln_frontier, in_frontier).indices
-        
-        # TODO: add "-1" possibility
 
-        prop_assigns = [vp[indices[i]] 
-            for i, vp in enumerate(viable_assigns)]
+        invalid_prop = False
+        prop_assigns = []
+        for i, vp in enumerate(viable_assigns):
+            try:
+                prop_assigns.append(vp[indices[i]])
+            except:
+                if not allow_no_match:
+                    invalid_prop = True
+                    break
+                if indices[i] == -1 or indices[i] >= len(viable_assigns[i]):
+                    prop_assigns.append((0.0, None))
+
+        if invalid_prop:
+            continue
 
         # check if any incompatible pairs of constraints violate `compat_fn`
         compat_check_iter = zip(*np.where(A > 0))
@@ -98,14 +116,19 @@ def match_constraints(constraints, viable_assigns, compat_fn):
                         hypo_assign[1]
                     )
                     if compatible:
-                        keep_ub_affinity += hypo_assign[0]
                         new_frontier_indices[j] = indices[j] + 1 + offset
+                        keep_ub_affinity += hypo_assign[0]
                         break
 
                 if not compatible:
-                    # can't keep i
-                    can_keep_i = False
-                    break
+                    if not allow_no_match:
+                        # can't keep i
+                        can_keep_i = False
+                        break
+                    else:
+                        # propose not to satisfy the jth constraint
+                        new_frontier_indices[j] = -1
+                        #keep_ub_affinity += 0.0  # vacuous, but for verbosity
 
             if can_keep_i:
                 new_frontier = Frontier(
@@ -114,32 +137,45 @@ def match_constraints(constraints, viable_assigns, compat_fn):
                 uniqheappush(soln_frontier, in_frontier, new_frontier)
 
             # remove i
-            if indices[i] + 1 < len(viable_assigns[i]):
+            if indices[i] + 1 < len(viable_assigns[i]) or allow_no_match:
                 # create indices
                 new_frontier_indices = copy.deepcopy(indices)
-                new_frontier_indices[i] = indices[i] + 1
 
-                # compute ub affinity
-                new_i_affinity = viable_assigns[i][indices[i]+1][0]
-                keep_ub_affinity = sum([x[0] for x in prop_assigns])
-                keep_ub_affinity -= prop_assigns[i][0]
-                keep_ub_affinity += new_i_affinity
+                # base remove ub affinity
+                remove_ub_affinity = sum([x[0] for x in prop_assigns])
+                remove_ub_affinity -= prop_assigns[i][0]
 
-                # build obj instance and add to heap
+                if indices[i] + 1 < len(viable_assigns[i]):
+                    # update indices
+                    new_frontier_indices[i] = indices[i] + 1
+
+                    # update remove ub affinitiy
+                    new_i_affinity = viable_assigns[i][indices[i]+1][0]
+                    remove_ub_affinity += new_i_affinity
+                elif allow_no_match:
+                    # update indices
+                    new_frontier_indices[i] = -1
+
+                    ## update remove ub affinitiy
+                    #remove_ub_affinity += 0.0  # vacuous, but for verbosity
+
                 new_frontier = Frontier(
-                    keep_ub_affinity, new_frontier_indices
+                    remove_ub_affinity, new_frontier_indices
                 )
                 uniqheappush(soln_frontier, in_frontier, new_frontier)
 
     if compatible:
-        _, assigns = zip(*prop_assigns)
+        scores, assigns = zip(*prop_assigns)
     else:
-        assigns = None
-    return assigns
+        return None
+    return scores, assigns
 
 
 def lca_check(constraint1, node1, constraint2, node2):
     """ Checks to see if lca(node1, node2) is not in {node1, node2}. """
+    if node1 is None or node2 is None:
+        return True
+
     nodes = sorted(
         [(node1.uid, node1), (node2.uid, node2)],
         key=lambda x: -x[0]
@@ -159,6 +195,8 @@ def lca_check(constraint1, node1, constraint2, node2):
 
 
 def viable_match_check(constraint1, node1, constraint2, node2):
+    if node1 is None or node2 is None:
+        return True
     if node1 == node2 and np.any((constraint1 * constraint2) < 0):
         return False
     return True

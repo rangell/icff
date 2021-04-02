@@ -182,8 +182,9 @@ def cut_objective(cut_frontier, sim_func, constraints):
     # before constraints
     log_obj_val = intern_cluster_sim - extern_cluster_sim
 
-    # TODO: incorporate constraint violation + attr add penalty
+    # incorporate constraint violation + attr add penalty
     if len(constraints) > 0:
+        # need to compute the viable matches between constraints and cut
         viable_assigns = []
         for xi in constraints:
             local_viable_assigns = []
@@ -194,18 +195,25 @@ def cut_objective(cut_frontier, sim_func, constraints):
                     local_viable_assigns.append((assign_aff, sub_cluster))
             viable_assigns.append(local_viable_assigns)
         
-        # TODO: we have a matching problem between constraints and cut_frontier
-        match_assignments = match_constraints(
-            constraints, viable_assigns, viable_match_check
+        # we have a matching problem between constraints and cut
+        match_out = match_constraints(
+            constraints,
+            viable_assigns,
+            viable_match_check,
+            allow_no_match=True
         )
+        assert match_out is not None
+        match_scores, _ = match_out
 
-        embed()
-        exit()
-
-    ## track the cuts we're evaluating
-    #print(str(obj_val) + '\n' + str(cut_frontier))
+        # update log_obj_val
+        constraint_satisfaction = np.mean(match_scores)
+        log_obj_val += constraint_satisfaction
 
     obj_val = np.exp(log_obj_val)
+
+    #if len(constraints) > 0:
+    #    # track the cuts we're evaluating
+    #    print(str(obj_val) + '\n' + str(cut_frontier))
 
     return obj_val
 
@@ -237,7 +245,7 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
     Z = custom_hac(points, sim_func)
 
     # build the tree
-    pred_tree_nodes = copy.deepcopy(leaf_nodes)
+    pred_tree_nodes = copy.copy(leaf_nodes) # shallow copy on purpose!
     new_node_id = num_points
     assert new_node_id == len(pred_tree_nodes)
     for merge_idx, merger in enumerate(Z):
@@ -449,7 +457,7 @@ def run_dummy_icff(gold_entities,
                    mentions,
                    mention_labels,
                    sim_func,
-                   rounds=3):
+                   rounds=10):
     constraints = []
 
     # construct tree node objects for leaves
@@ -462,13 +470,19 @@ def run_dummy_icff(gold_entities,
         )
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
 
+        print(metrics)
+
         # TODO: add logger to print metrics
 
         # TODO: add check to see if perfect clustering is returned
 
         # generate constraints and viable places given predictions
         new_constraints = gen_constraint(
-            gold_entities, pred_canon_ents, pred_tree_nodes, sim_func, num_to_generate=10
+            gold_entities,
+            pred_canon_ents,
+            pred_tree_nodes,
+            sim_func,
+            num_to_generate=3
         )
 
         # update constraints and viable placements
@@ -483,10 +497,14 @@ def run_dummy_icff(gold_entities,
             )
 
         # solve structured prediction problem of jointly placing the constraints
-        resolved_placements = match_constraints(
-                constraints, viable_placements, lca_check
+        placements_out = match_constraints(
+            constraints,
+            viable_placements,
+            lca_check,
+            allow_no_match=False    # may change this arg later
         )
-        assert resolved_placements is not None
+        assert placements_out is not None
+        _, resolved_placements = placements_out
 
         # reset all leaf transformed_rep's
         for node in leaves:
@@ -496,7 +514,6 @@ def run_dummy_icff(gold_entities,
         for xi, rp in zip(constraints, resolved_placements):
             for node in rp.get_leaves():
                 node.transformed_rep |= xi
-
 
     embed()
     exit()
