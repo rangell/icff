@@ -101,7 +101,8 @@ def cut_objective(cut_frontier, sim_func, constraints):
 
     def expected_sim(reps):
         sim_mx = np.triu(sim_func(reps, reps) + 1e-8, k=1)
-        return np.mean(sim_mx[sim_mx > 0])
+        assert sim_mx[sim_mx != 0].size > 0
+        return np.mean(sim_mx[sim_mx != 0])
 
     # compute expected external cluster sim
     extern_cluster_reps = np.vstack([n.transformed_rep for n in cut_frontier])
@@ -122,10 +123,11 @@ def cut_objective(cut_frontier, sim_func, constraints):
         return -np.inf
 
     # o.w.
+    assert len(intern_cluster_sims) > 0
     intern_cluster_sim = np.mean(intern_cluster_sims)
 
     # before constraints
-    log_obj_val = intern_cluster_sim - extern_cluster_sim
+    obj_val = intern_cluster_sim - extern_cluster_sim
 
     # incorporate constraint violation + attr add penalty
     if len(constraints) > 0:
@@ -150,29 +152,35 @@ def cut_objective(cut_frontier, sim_func, constraints):
         assert match_out is not None
         match_scores, _ = match_out
 
-        # update log_obj_val
-        constraint_satisfaction = np.mean(match_scores)
-        log_obj_val += constraint_satisfaction
+        logging.debug(match_scores)
 
-    obj_val = np.exp(log_obj_val)
+        # update obj_val
+        assert len(match_scores) > 0
+        constraint_satisfaction = np.mean(match_scores)
+        obj_val += constraint_satisfaction
 
     return obj_val
 
 
-def get_opt_tree_cut(cut_frontier, sim_func, constraints):
-    max_cut = cut_frontier
+def get_opt_tree_cut(Z, leaf_nodes, sim_func, constraints):
+    cut_frontier = copy.copy(leaf_nodes)
+    max_cut = copy.copy(cut_frontier)
     max_cut_score = cut_objective(cut_frontier, sim_func, constraints)
-    for i, node in enumerate(cut_frontier):
-        if len(node.children) > 0:
-            alter_cut_front = cut_frontier[:i]\
-                              + node.children\
-                              + cut_frontier[i+1:]
-            alter_cut, alter_cut_score = get_opt_tree_cut(
-                alter_cut_front, sim_func, constraints
-            )
-            if alter_cut_score > max_cut_score:
-                max_cut = alter_cut
-                max_cut_score = alter_cut_score
+    active_nodes = {n.uid : n for n in leaf_nodes}
+    for par_uid, row in enumerate(Z, start=len(leaf_nodes)):
+        merge_parent = active_nodes[row[0]].parent
+        assert merge_parent == active_nodes[row[1]].parent
+        assert merge_parent.uid == par_uid
+        active_nodes.pop(row[0])
+        active_nodes.pop(row[1])
+        active_nodes[merge_parent.uid] = merge_parent
+        cut_frontier = list(active_nodes.values())
+        cut_score = cut_objective(
+            cut_frontier, sim_func, constraints
+        )
+        if cut_score > max_cut_score:
+            max_cut = copy.copy(cut_frontier)
+            max_cut_score = cut_score
 
     return max_cut, max_cut_score
 
@@ -204,7 +212,7 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        pred_tree_nodes[-1].children, sim_func, constraints
+        Z, leaf_nodes, sim_func, constraints
     )
 
     # the predicted entities canonicalization
@@ -270,17 +278,17 @@ def gen_constraint(gold_entities,
     return constraints
 
 
-def run_mock_icff(gold_entities,
-                   mentions,
-                   mention_labels,
-                   sim_func,
-                   max_rounds=10):
+def run_mock_icff(opt,
+                  gold_entities,
+                  mentions,
+                  mention_labels,
+                  sim_func):
     constraints = []
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
-    for r in range(max_rounds):
+    for r in range(opt.max_rounds):
         # cluster the points
         out = cluster_points(
             leaves, mention_labels, sim_func, constraints
@@ -292,13 +300,17 @@ def run_mock_icff(gold_entities,
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
+        #if r > 5:
+        #    embed()
+        #    exit()
+
         # generate constraints and viable places given predictions
         new_constraints = gen_constraint(
             gold_entities,
             pred_canon_ents,
             pred_tree_nodes,
             sim_func,
-            num_to_generate=3
+            num_to_generate=opt.num_constraints_per_round
         )
 
         # update constraints and viable placements
@@ -332,6 +344,7 @@ def run_mock_icff(gold_entities,
                 node.transformed_rep |= xi
 
 
+
 def get_opt():
 
     # TODO: add conditional opts (e.g. diff opts for synthetic vs. real data)
@@ -351,6 +364,10 @@ def get_opt():
     parser.add_argument('--num_mentions', type=int, default=10,
                         help="number of mentions to generate when generating"\
                              "synthetic data")
+    parser.add_argument('--max_rounds', type=int, default=100,
+                        help="number of rounds to generate feedback for")
+    parser.add_argument('--num_constraints_per_round', type=int, default=1,
+                        help="number of constraints to generate per round")
     parser.add_argument('--data_dim', type=int, default=16,
                         help="number of possible features (i.e. dimension of"\
                              "vector representation of points")
@@ -397,7 +414,7 @@ def main():
     sim_func = cos_sim
 
     # run the core function
-    run_mock_icff(gold_entities, mentions, mention_labels, sim_func)
+    run_mock_icff(opt, gold_entities, mentions, mention_labels, sim_func)
 
 
 if __name__ == '__main__':

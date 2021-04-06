@@ -9,4 +9,6 @@ python src/main.py\
     --num_entities=2\
     --num_mentions=10\
     --data_dim=16\
+    --max_rounds=50\
+    --num_constraints_per_round=1\
     --debug
