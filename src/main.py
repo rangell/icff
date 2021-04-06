@@ -288,8 +288,9 @@ def run_mock_icff(gold_entities,
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
-
-        # TODO: add check to see if perfect clustering is returned
+        if metrics['adj_rand_idx'] == 1.0:
+            logger.info("perfect clustering reached in {} rounds".format(r))
+            break
 
         # generate constraints and viable places given predictions
         new_constraints = gen_constraint(
@@ -329,9 +330,6 @@ def run_mock_icff(gold_entities,
         for xi, rp in zip(constraints, resolved_placements):
             for node in rp.get_leaves():
                 node.transformed_rep |= xi
-
-    embed()
-    exit()
 
 
 def get_opt():
