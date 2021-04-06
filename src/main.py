@@ -155,10 +155,6 @@ def cut_objective(cut_frontier, sim_func, constraints):
 
     obj_val = np.exp(log_obj_val)
 
-    #if len(constraints) > 0:
-    #    # track the cuts we're evaluating
-    #    print(str(obj_val) + '\n' + str(cut_frontier))
-
     return obj_val
 
 
