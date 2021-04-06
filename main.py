@@ -11,10 +11,11 @@ from scipy.sparse import csr_matrix, coo_matrix
 from scipy.cluster.hierarchy import fcluster
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
-from sklearn.metrics.pairwise import cosine_similarity
 
+from data import gen_data
 from match import match_constraints, lca_check, viable_match_check
 from metrics import dendrogram_purity
+from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
 
@@ -29,63 +30,6 @@ DATA_FNAME = 'synth_data.pkl'
 # - 
 
 
-############################ DATA GENERATION ##################################
-def gen_data(num_entities, num_mentions, dim):
-    entities, mentions, mention_labels = [], [], []
-    block_size = dim // num_entities
-    for ent_idx in range(num_entities):
-        tmp_ent = np.zeros(dim, dtype=int)
-        tmp_ent[ent_idx*block_size:(ent_idx+1)*block_size] = 1
-        noise = (np.random.randint(0, 10, size=tmp_ent.shape) < 4).astype(int)
-        tmp_ent |= noise
-        entities.append(tmp_ent)
-    entities = np.vstack(entities)
-
-    # assert entities are non-nested!!!
-    assert np.all(np.argmax(entities @ entities.T, axis=1)
-                  == np.array(range(entities.shape[0])))
-
-    for _ in range(num_mentions):
-        ent_idx = random.randint(0, num_entities-1)
-        mention_labels.append(ent_idx)
-        while True:
-            ent_mask = (np.random.randint(0, 10, size=tmp_ent.shape) < 4).astype(int)
-            sample_mention = ent_mask & entities[ent_idx]
-            subsets = np.all((sample_mention & entities) == sample_mention, axis=1)
-            if subsets[ent_idx] and np.sum(subsets) == 1:
-                mentions.append(sample_mention)
-                break
-    mentions = np.vstack(mentions)
-    mention_labels = np.asarray(mention_labels)
-
-    # HACK: entity reps are exactly the aggregation of all their mentions
-    #        (no more, no less) -> this way we don't need to add attributes
-    #        which are not present in the mentions
-    for ent_idx in range(num_entities):
-        mention_mask = (mention_labels == ent_idx)
-        assert np.sum(mention_mask) > 0
-        entities[ent_idx] = (np.sum(mentions[mention_mask], axis=0) > 0).astype(int)
-        
-    return entities, mentions, mention_labels
-
-
-############################ SIM FUNCTIONS ###################################
-def _dot_prod(a, b):
-    return a @ b.T
-
-
-def _jaccard_sim(a, b):
-    """ Compute the pairwise jaccard similarity of sets of sets a and b. """
-    intersect_size = np.sum((_a != 0) & (_b != 0) & (_a == _b), axis=-1)
-    union_size = np.sum(np.abs(_a) + np.abs(_b), axis=-1) - intersect_size
-    return intersect_size / union_size
-
-
-def _cos_sim(a, b):
-    return cosine_similarity(a, b)
-
-
-############################ CLUSTERING ###################################
 def custom_hac(points, sim_func):
     level_set = points.astype(float)
     uids = np.arange(level_set.shape[0])
@@ -293,130 +237,6 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
     return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
 
 
-def place_constraints(constraints, viable_placements):
-    # organize constraints nicely
-    Xi = np.vstack(constraints)
-
-    # compute incompatibility matrix
-    A = np.triu(np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1), k=1)
-
-    class Frontier(object):
-        def __init__(self, affinity, indices):
-            self.ub_affinity = affinity
-            self.indices = indices
-
-        def __lt__(self, other):
-            # used for min heap, so flip it
-            return self.ub_affinity > other.ub_affinity 
-
-        def __repr__(self):
-            return '<ub_affinitiy: {} - indices: {}>'.format(
-                self.ub_affinity,
-                self.indices
-            )
-
-    def uniqheappush(heap, inheap, frontier):
-        if tuple(frontier.indices) in inheap:
-            return False
-        heappush(heap, frontier)
-        inheap.add(tuple(frontier.indices))
-        return True
-
-    def uniqheappop(heap, inheap):
-        frontier = heappop(heap)
-        inheap.discard(tuple(frontier.indices))
-        return frontier
-
-    # find best placement using branch and bound (pruning) solution
-    soln_frontier = []
-    in_frontier = set()
-    _ = uniqheappush(
-        soln_frontier,
-        in_frontier,
-        Frontier(np.inf, [0] * len(viable_placements))
-    )
-    compatible = False
-    while len(soln_frontier) > 0:
-        indices = uniqheappop(soln_frontier, in_frontier).indices
-        prop_placements = [vp[indices[i]] 
-            for i, vp in enumerate(viable_placements)]
-
-        # check if any incompatible pairs of constraints violate lca rule
-        compat_check_iter = zip(*np.where(A > 0))
-        incompat_pairs = []
-        for i, j in compat_check_iter:
-            compatible = lca_check(
-                prop_placements[i][1], prop_placements[j][1]
-            )
-            if not compatible:
-                incompat_pairs.append((i, j))
-        
-        if len(incompat_pairs) == 0:
-            compatible = True
-            break
-
-        # current proposal must be incompatible, push available frontiers
-        incompat_dict = defaultdict(list)
-        for i, j in incompat_pairs:
-            incompat_dict[i].append(j)
-
-        # add frontiers
-        for i, local_incompat in incompat_dict.items():
-            # keep i
-            keep_ub_affinity = sum(
-                [x[0] for idx, x in enumerate(prop_placements)
-                    if idx not in local_incompat]
-            )
-            new_frontier_indices = copy.deepcopy(indices)
-            can_keep_i = True
-            for j in local_incompat:
-                compatible = False
-                _iter = enumerate(viable_placements[j][indices[j]+1:])
-                for offset, hypo_place in _iter:
-                    compatible = lca_check(
-                        prop_placements[i][1], hypo_place[1]
-                    )
-                    if compatible:
-                        keep_ub_affinity += hypo_place[0]
-                        new_frontier_indices[j] = indices[j] + 1 + offset
-                        break
-
-                if not compatible:
-                    # can't keep i
-                    can_keep_i = False
-                    break
-
-            if can_keep_i:
-                new_frontier = Frontier(
-                    keep_ub_affinity, new_frontier_indices
-                )
-                uniqheappush(soln_frontier, in_frontier, new_frontier)
-
-            # remove i
-            if indices[i] + 1 < len(viable_placements[i]):
-                # create indices
-                new_frontier_indices = copy.deepcopy(indices)
-                new_frontier_indices[i] = indices[i] + 1
-
-                # compute ub affinity
-                new_i_affinity = viable_placements[i][indices[i]+1][0]
-                keep_ub_affinity = sum([x[0] for x in prop_placements])
-                keep_ub_affinity -= prop_placements[i][0]
-                keep_ub_affinity += new_i_affinity
-
-                # build obj instance and add to heap
-                new_frontier = Frontier(
-                    keep_ub_affinity, new_frontier_indices
-                )
-                uniqheappush(soln_frontier, in_frontier, new_frontier)
-
-    if compatible:
-        _, placements = zip(*prop_placements)
-    else:
-        placements = None
-    return placements
-
-
 def gen_constraint(gold_entities,
                    pred_canon_ents,
                    pred_tree_nodes,
@@ -534,8 +354,8 @@ def main():
         with open(DATA_FNAME, 'rb') as f:
             gold_entities, mentions, mention_labels = pickle.load(f)
 
-    # declare similarity function
-    sim_func = _cos_sim
+    # declare similarity function with function pointer
+    sim_func = cos_sim
 
     # run the core function
     run_dummy_icff(gold_entities, mentions, mention_labels, sim_func)
