@@ -2,6 +2,8 @@ import os
 import copy
 import pickle
 import random
+import logging
+import argparse
 from collections import defaultdict
 from heapq import heappop, heappush, heapify
 from functools import reduce
@@ -18,17 +20,16 @@ from metrics import dendrogram_purity
 from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
+from utils import initialize_exp
 
 from IPython import embed
 
 
-DATA_FNAME = 'data/synth_data.pkl'
+logger = logging.getLogger(__name__)
 
 # TODO:
-# - add cmd line args
 # - add wandb for larger experiments
 # - 
-
 
 def custom_hac(points, sim_func):
     level_set = points.astype(float)
@@ -269,26 +270,24 @@ def gen_constraint(gold_entities,
     return constraints
 
 
-def run_dummy_icff(gold_entities,
+def run_mock_icff(gold_entities,
                    mentions,
                    mention_labels,
                    sim_func,
-                   rounds=10):
+                   max_rounds=10):
     constraints = []
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
-    for r in range(rounds):
+    for r in range(max_rounds):
         # cluster the points
         out = cluster_points(
             leaves, mention_labels, sim_func, constraints
         )
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
 
-        print(metrics)
-
-        # TODO: add logger to print metrics
+        logger.info("round: {} - metrics: {}".format(r, metrics))
 
         # TODO: add check to see if perfect clustering is returned
 
@@ -335,19 +334,56 @@ def run_dummy_icff(gold_entities,
     exit()
 
 
-def main():
-    # fix this with command line args later
-    seed = 27
-    random.seed(seed)
-    np.random.seed(seed)
+def get_opt():
 
-    num_entities = 2
-    num_mentions = 10
-    num_dims = 16
+    # TODO: add conditional opts (e.g. diff opts for synthetic vs. real data)
+
+    parser = argparse.ArgumentParser() 
+    parser.add_argument('--seed', type=int, default=27,
+                        help="random seed for initialization")
+    parser.add_argument('--debug', action='store_true',
+                        help="Enables and disables certain opts for debugging")
+    parser.add_argument("--output_dir", default=None, type=str,
+                        help="The output directory for this run.")
+    parser.add_argument("--data_dir", default=None, type=str,
+                        help="The directory where data is stored.")
+    parser.add_argument('--num_entities', type=int, default=2,
+                        help="number of entities to generate when generating"\
+                             "synthetic data")
+    parser.add_argument('--num_mentions', type=int, default=10,
+                        help="number of mentions to generate when generating"\
+                             "synthetic data")
+    parser.add_argument('--data_dim', type=int, default=16,
+                        help="number of possible features (i.e. dimension of"\
+                             "vector representation of points")
+
+    opt = parser.parse_args()
+
+    # check to make sure there are no issues with the specified opts
+    check_opt(opt)
+
+    return opt
+
+
+def check_opt(opt):
+    # TODO: do a bunch of checks on the options
+    pass
+
+
+def main():
+    # get command line options
+    opt = get_opt()
+
+    # initialize the experiment
+    initialize_exp(opt)
 
     # get or create the synthetic data
-    data_fname = 'data/synth_data-{}_{}_{}-{}.pkl'.format(
-        num_entities, num_mentions, num_dims, seed
+    data_fname = '{}/synth_data-{}_{}_{}-{}.pkl'.format(
+        opt.data_dir,
+        opt.num_entities,
+        opt.num_mentions,
+        opt.data_dim,
+        opt.seed
     )
     if not os.path.exists(data_fname):
         with open(data_fname, 'wb') as f:
@@ -363,7 +399,7 @@ def main():
     sim_func = cos_sim
 
     # run the core function
-    run_dummy_icff(gold_entities, mentions, mention_labels, sim_func)
+    run_mock_icff(gold_entities, mentions, mention_labels, sim_func)
 
 
 if __name__ == '__main__':
