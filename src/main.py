@@ -345,13 +345,22 @@ def main():
     random.seed(seed)
     np.random.seed(seed)
 
+    num_entities = 2
+    num_mentions = 10
+    num_dims = 16
+
     # get or create the synthetic data
-    if not os.path.exists(DATA_FNAME):
-        with open(DATA_FNAME, 'wb') as f:
-            gold_entities, mentions, mention_labels = gen_data(2, 10, 16)
+    data_fname = 'data/synth_data-{}_{}_{}-{}.pkl'.format(
+        num_entities, num_mentions, num_dims, seed
+    )
+    if not os.path.exists(data_fname):
+        with open(data_fname, 'wb') as f:
+            gold_entities, mentions, mention_labels = gen_data(
+                    num_entities, num_mentions, num_dims
+            )
             pickle.dump((gold_entities, mentions, mention_labels), f)
     else:
-        with open(DATA_FNAME, 'rb') as f:
+        with open(data_fname, 'rb') as f:
             gold_entities, mentions, mention_labels = pickle.load(f)
 
     # declare similarity function with function pointer
