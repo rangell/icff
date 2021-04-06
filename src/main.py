@@ -386,7 +386,7 @@ def main():
     if not os.path.exists(data_fname):
         with open(data_fname, 'wb') as f:
             gold_entities, mentions, mention_labels = gen_data(
-                    num_entities, num_mentions, num_dims
+                    opt.num_entities, opt.num_mentions, opt.data_dim
             )
             pickle.dump((gold_entities, mentions, mention_labels), f)
     else:
