@@ -22,7 +22,7 @@ from tree_node import TreeNode
 from IPython import embed
 
 
-DATA_FNAME = 'synth_data.pkl'
+DATA_FNAME = 'data/synth_data.pkl'
 
 # TODO:
 # - add cmd line args
