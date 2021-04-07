@@ -14,6 +14,13 @@ class TreeNode(object):
         self.children = children
         self.parent = None
 
+        # compute total number of cuts from this node down
+        self.num_cuts = 1
+        if len(self.children) > 0:
+            self.num_cuts += reduce(
+                lambda a, b : a * b, [x.num_cuts for x in self.children]
+            )
+
         for child in self.children:
             child.parent = self
 

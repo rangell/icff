@@ -152,8 +152,6 @@ def cut_objective(cut_frontier, sim_func, constraints):
         assert match_out is not None
         match_scores, _ = match_out
 
-        logging.debug(match_scores)
-
         # update obj_val
         assert len(match_scores) > 0
         constraint_satisfaction = np.mean(match_scores)
@@ -162,25 +160,74 @@ def cut_objective(cut_frontier, sim_func, constraints):
     return obj_val
 
 
-def get_opt_tree_cut(Z, leaf_nodes, sim_func, constraints):
-    cut_frontier = copy.copy(leaf_nodes)
-    max_cut = copy.copy(cut_frontier)
-    max_cut_score = cut_objective(cut_frontier, sim_func, constraints)
-    active_nodes = {n.uid : n for n in leaf_nodes}
-    for par_uid, row in enumerate(Z, start=len(leaf_nodes)):
-        merge_parent = active_nodes[row[0]].parent
-        assert merge_parent == active_nodes[row[1]].parent
-        assert merge_parent.uid == par_uid
-        active_nodes.pop(row[0])
-        active_nodes.pop(row[1])
-        active_nodes[merge_parent.uid] = merge_parent
-        cut_frontier = list(active_nodes.values())
-        cut_score = cut_objective(
-            cut_frontier, sim_func, constraints
+def sample_single_cut(node):
+    split_prob = 1.0 - (1.0 / node.num_cuts)
+    #split_prob = 1.0 - (1.0 / (1.0 + np.log(node.num_cuts)))
+
+    noise_sample = random.uniform(0, 1)
+    if noise_sample < split_prob:
+        # split down
+        return reduce(
+            lambda l1, l2 : l1 + l2,
+            [sample_single_cut(c) for c in node.children]
         )
-        if cut_score > max_cut_score:
-            max_cut = copy.copy(cut_frontier)
-            max_cut_score = cut_score
+    # else, keep this node in cut frontier
+    return [node]
+
+
+def get_opt_tree_cut(pred_tree_nodes, leaf_nodes, sim_func, constraints):
+    # simulated annealing approach
+
+    max_steps = 100
+
+    root_node = pred_tree_nodes[-1]
+    curr_cut = sample_single_cut(root_node)
+    curr_cut_score = cut_objective(
+        curr_cut, sim_func, constraints
+    )
+    max_cut, max_cut_score = copy.copy(curr_cut), curr_cut_score
+    root_node = pred_tree_nodes[-1]
+
+    for step_num in range(max_steps):
+        temp = 1.0 / np.sqrt((step_num + 1.0) / (max_steps + 1.0)) - 1.0  # might change this function later
+
+        # sample random neighbor cut -> proposed cut
+        prop_cut = copy.copy(curr_cut)
+        sampled_node_idx = random.randint(0, len(curr_cut)-1)
+        sampled_node = prop_cut[sampled_node_idx]
+        split_flag = random.randint(0, 1) and (len(sampled_node.children) > 0)
+        if sampled_node.parent is None or split_flag:
+            # split
+            del prop_cut[sampled_node_idx]
+            prop_cut.extend(sampled_node.children)
+        else:
+            # merge
+            sampled_node_parent = sampled_node.parent
+            idxs_to_del = [i for i, n in enumerate(prop_cut)
+                                if n.parent == sampled_node_parent]
+            idxs_to_del = sorted(idxs_to_del, reverse=True) 
+            for idx in idxs_to_del:
+                del prop_cut[idx]
+            prop_cut.append(sampled_node_parent)
+
+        # compute objective for proposed cut
+        prop_cut_score = cut_objective(
+            prop_cut, sim_func, constraints
+        )
+
+        # update max_cut if proposed is better
+        if prop_cut_score > max_cut_score:
+            max_cut = copy.copy(prop_cut)
+            max_cut_score = prop_cut_score
+
+        # accept proposed cut or not
+        accept_prob = np.min(
+            (1.0, np.exp((prop_cut_score - curr_cut_score) / temp))
+        )
+        noise_sample = random.uniform(0, 1)
+        if noise_sample < accept_prob:
+            curr_cut = copy.copy(prop_cut)
+            curr_cut_score = prop_cut_score
 
     return max_cut, max_cut_score
 
@@ -212,7 +259,7 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        Z, leaf_nodes, sim_func, constraints
+        pred_tree_nodes, leaf_nodes, sim_func, constraints
     )
 
     # the predicted entities canonicalization
@@ -299,10 +346,6 @@ def run_mock_icff(opt,
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
-
-        #if r > 5:
-        #    embed()
-        #    exit()
 
         # generate constraints and viable places given predictions
         new_constraints = gen_constraint(
