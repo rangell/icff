@@ -136,7 +136,7 @@ def cut_objective(cut_frontier, sim_func, constraints):
         for xi in constraints:
             local_viable_assigns = []
             for sub_cluster in cut_frontier:
-                if np.all((sub_cluster.raw_rep * xi) > 0):
+                if np.all((sub_cluster.raw_rep * xi) >= 0):
                     assign_aff = (np.sum(xi == sub_cluster.raw_rep)
                                   / np.sum(xi > 0))
                     local_viable_assigns.append((assign_aff, sub_cluster))
@@ -150,7 +150,9 @@ def cut_objective(cut_frontier, sim_func, constraints):
             allow_no_match=True
         )
         assert match_out is not None
-        match_scores, _ = match_out
+        match_scores, match_assigns = match_out
+
+        logger.debug(match_scores)
 
         # update obj_val
         assert len(match_scores) > 0
@@ -162,34 +164,79 @@ def cut_objective(cut_frontier, sim_func, constraints):
 
 def sample_single_cut(node):
     split_prob = 1.0 - (1.0 / node.num_cuts)
-    #split_prob = 1.0 - (1.0 / (1.0 + np.log(node.num_cuts)))
-
     noise_sample = random.uniform(0, 1)
-    if noise_sample < split_prob:
-        # split down
-        return reduce(
-            lambda l1, l2 : l1 + l2,
-            [sample_single_cut(c) for c in node.children]
-        )
+    if not node.never_split:
+        if noise_sample < split_prob or node.always_split:
+            # split down
+            return reduce(
+                lambda l1, l2 : l1 + l2,
+                [sample_single_cut(c) for c in node.children]
+            )
     # else, keep this node in cut frontier
     return [node]
 
 
-def get_opt_tree_cut(pred_tree_nodes, leaf_nodes, sim_func, constraints):
-    # simulated annealing approach
+def sample_conditional_cut(root_node, nodes_cut_contains=[]):
+    # set flags for conditional cut
+    for node in nodes_cut_contains:
+        node.never_split = True
+        tmp_node = node
+        while tmp_node.parent is not None:
+            tmp_node = tmp_node.parent
+            tmp_node.always_split = True
 
+    # sample single conditional cut
+    sampled_cut = sample_single_cut(root_node)
+
+    # set flags for conditional cut
+    for node in nodes_cut_contains:
+        node.never_split = False
+        tmp_node = node
+        while tmp_node.parent is not None:
+            tmp_node = tmp_node.parent
+            tmp_node.always_split = False
+
+    return sampled_cut
+
+def get_opt_tree_cut(pred_tree_nodes, leaf_nodes, sim_func, constraints):
     max_steps = 100
 
     root_node = pred_tree_nodes[-1]
-    curr_cut = sample_single_cut(root_node)
-    curr_cut_score = cut_objective(
-        curr_cut, sim_func, constraints
-    )
-    max_cut, max_cut_score = copy.copy(curr_cut), curr_cut_score
-    root_node = pred_tree_nodes[-1]
+    fixed_nodes = []
 
+    # more intelligent sampling if we have constraints
+    if len(constraints) > 0:
+        # sample a good starting place for simulated annealing
+        # compute viable placements
+        viable_placements = []
+        for xi in constraints:
+            compatible_nodes = constraint_compatible_nodes(
+                pred_tree_nodes, xi, sim_func
+            )
+            viable_placements.append(
+                    sorted(compatible_nodes, key=lambda x: -x[0])
+            )
+        # solve structured prediction problem of jointly placing the constraints
+        placements_out = match_constraints(
+            constraints,
+            viable_placements,
+            lca_check,
+            allow_no_match=False    # may change this arg later
+        )
+        assert placements_out is not None
+        _, resolved_placements = placements_out
+        fixed_nodes = copy.copy(resolved_placements)
+
+    # compute initial cut and score of that cut 
+    curr_cut = sample_conditional_cut(
+            root_node, nodes_cut_contains=fixed_nodes
+    )
+    curr_cut_score = cut_objective(curr_cut, sim_func, constraints)
+    max_cut, max_cut_score = copy.copy(curr_cut), curr_cut_score
+
+    # run simulated annealing
     for step_num in range(max_steps):
-        temp = 1.0 / np.sqrt((step_num + 1.0) / (max_steps + 1.0)) - 1.0  # might change this function later
+        temp = 1.0 / (step_num + 1.0)**(1/2)  # might change this function later
 
         # sample random neighbor cut -> proposed cut
         prop_cut = copy.copy(curr_cut)
@@ -211,12 +258,11 @@ def get_opt_tree_cut(pred_tree_nodes, leaf_nodes, sim_func, constraints):
             prop_cut.append(sampled_node_parent)
 
         # compute objective for proposed cut
-        prop_cut_score = cut_objective(
-            prop_cut, sim_func, constraints
-        )
+        prop_cut_score = cut_objective(prop_cut, sim_func, constraints)
 
         # update max_cut if proposed is better
         if prop_cut_score > max_cut_score:
+            logger.info('Here!!!')
             max_cut = copy.copy(prop_cut)
             max_cut_score = prop_cut_score
 
@@ -318,6 +364,10 @@ def gen_constraint(gold_entities,
             # merge required
             super_gold_ent = gold_entities[np.argmax(is_ent_subsets)]
             ff_mask = np.random.randint(0, 2, size=super_gold_ent.size)
+            
+            # NOTE: JUST FOR TESTING
+            ff_mask = np.ones_like(ff_mask)
+
             ff_constraint = (2*super_gold_ent - 1) * ff_mask
 
         constraints.append(ff_constraint)
@@ -330,7 +380,11 @@ def run_mock_icff(opt,
                   mentions,
                   mention_labels,
                   sim_func):
+
+
     constraints = []
+    # NOTE: JUST FOR TESTING
+    constraints = [2*e - 1 for e in gold_entities]
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
@@ -347,17 +401,17 @@ def run_mock_icff(opt,
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        # generate constraints and viable places given predictions
-        new_constraints = gen_constraint(
-            gold_entities,
-            pred_canon_ents,
-            pred_tree_nodes,
-            sim_func,
-            num_to_generate=opt.num_constraints_per_round
-        )
+        ## generate constraints and viable places given predictions
+        #new_constraints = gen_constraint(
+        #    gold_entities,
+        #    pred_canon_ents,
+        #    pred_tree_nodes,
+        #    sim_func,
+        #    num_to_generate=opt.num_constraints_per_round
+        #)
 
-        # update constraints and viable placements
-        constraints.extend(new_constraints)
+        ## update constraints and viable placements
+        #constraints.extend(new_constraints)
         viable_placements = []
         for xi in constraints:
             compatible_nodes = constraint_compatible_nodes(
