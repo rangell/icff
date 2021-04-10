@@ -18,16 +18,6 @@ class TreeNode(object):
         for child in self.children:
             child.parent = self
 
-        # compute total number of cuts from this node down
-        self.num_cuts = 1
-        if len(self.children) > 0:
-            self.num_cuts += reduce(
-                lambda a, b : a * b, [x.num_cuts for x in self.children]
-            )
-
-        # for cut sampling
-        self.always_split, self.never_split = False, False
-
     def get_leaves(self):
         if len(self.children) == 0:
             return [self]

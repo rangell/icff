@@ -92,188 +92,47 @@ def custom_hac(points, sim_func):
     return Z
 
 
+def intra_subcluster_sim(subcluster, sim_func):
+    assert len(subcluster) > 0
+    if len(subcluster) == 1:
+        return 1.0
+    reps = np.vstack([n.transformed_rep for n in subcluster]
+    sim_mx = np.triu(sim_func(reps, reps), k=1)
+    return np.sum(sim_mx)
+
+
+def constraint_satisfaction(subcluster, constraints):
+    constraints_satisfied = []
+    for xi in constraints:
+        if np.all((subcluster.raw_rep * xi) >= 0):
+            assign_aff = (np.sum(xi == subcluster.raw_rep)
+                          / np.sum(xi > 0))
+            constraints_satisfied.append((assign_aff, xi))
+        return sorted(constraints_satisfied, key=lambda x : -x[0])
+
+
 def cut_objective(cut_frontier, sim_func, constraints):
-    """ trying to maximize the value produced by this function. """
+    pass
 
-    # single cluster case
-    if len(cut_frontier) < 2:
-        return -np.inf
 
-    def expected_sim(reps):
-        sim_mx = np.triu(sim_func(reps, reps) + 1e-8, k=1)
-        assert sim_mx[sim_mx != 0].size > 0
-        return np.mean(sim_mx[sim_mx != 0])
-
-    # compute expected external cluster sim
-    extern_cluster_reps = np.vstack([n.transformed_rep for n in cut_frontier])
-    extern_cluster_sim = expected_sim(extern_cluster_reps)
-
-    # compute expected internal cluster sim
-    intern_cluster_sims = []
-    for n in cut_frontier:
-        intern_cluster_reps = np.vstack(
-            [l.transformed_rep for l in n.get_leaves()]
+def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints):
+    
+    # compute preliminaries for DP
+    for subcluster in pred_tree_nodes:
+        intra_score = intra_subcluster_sim(subcluster, sim_func)
+        constraints_satisfied = constraint_satisfaction(
+            subcluster, constraints
         )
-        if intern_cluster_reps.shape[0] == 1:
-            continue
-        intern_cluster_sims.append(expected_sim(intern_cluster_reps))
+        subcluster.constraint_score = 0.0
+        subcluster.prelim_constraint = None
+        if len(constraints_satisfied) > 0:
+            out = constraints_satisfied.pop(0) 
+            subcluster.constraint_score, subcluster.prelim_constraint = out
+        subcluster.prelim_score = intra_score + subcluster.constraint_score
 
-    # all singletons case
-    if len(intern_cluster_sims) < 1:
-        return -np.inf
-
-    # o.w.
-    assert len(intern_cluster_sims) > 0
-    intern_cluster_sim = np.mean(intern_cluster_sims)
-
-    # before constraints
-    obj_val = intern_cluster_sim - extern_cluster_sim
-
-    # incorporate constraint violation + attr add penalty
-    if len(constraints) > 0:
-        # need to compute the viable matches between constraints and cut
-        viable_assigns = []
-        for xi in constraints:
-            local_viable_assigns = []
-            for sub_cluster in cut_frontier:
-                if np.all((sub_cluster.raw_rep * xi) >= 0):
-                    assign_aff = (np.sum(xi == sub_cluster.raw_rep)
-                                  / np.sum(xi > 0))
-                    local_viable_assigns.append((assign_aff, sub_cluster))
-            viable_assigns.append(local_viable_assigns)
-        
-        # we have a matching problem between constraints and cut
-        match_out = match_constraints(
-            constraints,
-            viable_assigns,
-            viable_match_check,
-            allow_no_match=True
-        )
-        assert match_out is not None
-        match_scores, match_assigns = match_out
-
-        logger.debug(match_scores)
-
-        # update obj_val
-        assert len(match_scores) > 0
-        constraint_satisfaction = np.mean(match_scores)
-        obj_val += constraint_satisfaction
-
-    return obj_val
+    # find max
 
 
-def sample_single_cut(node):
-    split_prob = 1.0 - (1.0 / node.num_cuts)
-    noise_sample = random.uniform(0, 1)
-    if not node.never_split:
-        if noise_sample < split_prob or node.always_split:
-            # split down
-            return reduce(
-                lambda l1, l2 : l1 + l2,
-                [sample_single_cut(c) for c in node.children]
-            )
-    # else, keep this node in cut frontier
-    return [node]
-
-
-def sample_conditional_cut(root_node, nodes_cut_contains=[]):
-    # set flags for conditional cut
-    for node in nodes_cut_contains:
-        node.never_split = True
-        tmp_node = node
-        while tmp_node.parent is not None:
-            tmp_node = tmp_node.parent
-            tmp_node.always_split = True
-
-    # sample single conditional cut
-    sampled_cut = sample_single_cut(root_node)
-
-    # set flags for conditional cut
-    for node in nodes_cut_contains:
-        node.never_split = False
-        tmp_node = node
-        while tmp_node.parent is not None:
-            tmp_node = tmp_node.parent
-            tmp_node.always_split = False
-
-    return sampled_cut
-
-def get_opt_tree_cut(pred_tree_nodes, leaf_nodes, sim_func, constraints):
-    max_steps = 100
-
-    root_node = pred_tree_nodes[-1]
-    fixed_nodes = []
-
-    # more intelligent sampling if we have constraints
-    if len(constraints) > 0:
-        # sample a good starting place for simulated annealing
-        # compute viable placements
-        viable_placements = []
-        for xi in constraints:
-            compatible_nodes = constraint_compatible_nodes(
-                pred_tree_nodes, xi, sim_func
-            )
-            viable_placements.append(
-                    sorted(compatible_nodes, key=lambda x: -x[0])
-            )
-        # solve structured prediction problem of jointly placing the constraints
-        placements_out = match_constraints(
-            constraints,
-            viable_placements,
-            lca_check,
-            allow_no_match=False    # may change this arg later
-        )
-        assert placements_out is not None
-        _, resolved_placements = placements_out
-        fixed_nodes = copy.copy(resolved_placements)
-
-    # compute initial cut and score of that cut 
-    curr_cut = sample_conditional_cut(
-            root_node, nodes_cut_contains=fixed_nodes
-    )
-    curr_cut_score = cut_objective(curr_cut, sim_func, constraints)
-    max_cut, max_cut_score = copy.copy(curr_cut), curr_cut_score
-
-    # run simulated annealing
-    for step_num in range(max_steps):
-        temp = 1.0 / (step_num + 1.0)**(1/2)  # might change this function later
-
-        # sample random neighbor cut -> proposed cut
-        prop_cut = copy.copy(curr_cut)
-        sampled_node_idx = random.randint(0, len(curr_cut)-1)
-        sampled_node = prop_cut[sampled_node_idx]
-        split_flag = random.randint(0, 1) and (len(sampled_node.children) > 0)
-        if sampled_node.parent is None or split_flag:
-            # split
-            del prop_cut[sampled_node_idx]
-            prop_cut.extend(sampled_node.children)
-        else:
-            # merge
-            sampled_node_parent = sampled_node.parent
-            idxs_to_del = [i for i, n in enumerate(prop_cut)
-                                if n.parent == sampled_node_parent]
-            idxs_to_del = sorted(idxs_to_del, reverse=True) 
-            for idx in idxs_to_del:
-                del prop_cut[idx]
-            prop_cut.append(sampled_node_parent)
-
-        # compute objective for proposed cut
-        prop_cut_score = cut_objective(prop_cut, sim_func, constraints)
-
-        # update max_cut if proposed is better
-        if prop_cut_score > max_cut_score:
-            logger.info('Here!!!')
-            max_cut = copy.copy(prop_cut)
-            max_cut_score = prop_cut_score
-
-        # accept proposed cut or not
-        accept_prob = np.min(
-            (1.0, np.exp((prop_cut_score - curr_cut_score) / temp))
-        )
-        noise_sample = random.uniform(0, 1)
-        if noise_sample < accept_prob:
-            curr_cut = copy.copy(prop_cut)
-            curr_cut_score = prop_cut_score
 
     return max_cut, max_cut_score
 
@@ -281,7 +140,7 @@ def get_opt_tree_cut(pred_tree_nodes, leaf_nodes, sim_func, constraints):
 def cluster_points(leaf_nodes, labels, sim_func, constraints):
     # pull out all of the points
     points = np.vstack([x.transformed_rep for x in leaf_nodes])
-    num_points = points.shape[0]
+    num_points = points.shape[-1]
 
     # run clustering and produce the linkage matrix
     Z = custom_hac(points, sim_func)
@@ -295,30 +154,22 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
         lc_tr = pred_tree_nodes[lchild].transformed_rep
         rc_tr = pred_tree_nodes[rchild].transformed_rep
         new_transformed_rep = lc_tr | rc_tr
-        # if invalid merger
-        if np.any(new_transformed_rep < 0):
-            new_transformed_rep = np.zeros_like(lc_tr)
-
-            embed()
-            exit()
+        if np.any(new_transformed_rep < 0): # if invalid merger
+            new_transformed_rep = np.ones_like(lc_tr) * -np.inf
 
         pred_tree_nodes.append(
             TreeNode(
                 new_node_id,
                 pred_tree_nodes[lchild].raw_rep | pred_tree_nodes[rchild].raw_rep,
-                transformed_rep=(pred_tree_nodes[lchild].transformed_rep
-                                | pred_tree_nodes[rchild].transformed_rep),
+                transformed_rep=(pred_tree_nodes[lchild].transformed_rep | pred_tree_nodes[rchild].transformed_rep),
                 children=[pred_tree_nodes[lchild], pred_tree_nodes[rchild]]
             )
         )
         new_node_id += 1
 
-    embed()
-    exit()
-
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        pred_tree_nodes, leaf_nodes, sim_func, constraints
+        pred_tree_nodes, sim_func, constraints
     )
 
     # the predicted entities canonicalization
