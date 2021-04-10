@@ -292,6 +292,16 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
     assert new_node_id == len(pred_tree_nodes)
     for merge_idx, merger in enumerate(Z):
         lchild, rchild = int(merger[0]), int(merger[1])
+        lc_tr = pred_tree_nodes[lchild].transformed_rep
+        rc_tr = pred_tree_nodes[rchild].transformed_rep
+        new_transformed_rep = lc_tr | rc_tr
+        # if invalid merger
+        if np.any(new_transformed_rep < 0):
+            new_transformed_rep = np.zeros_like(lc_tr)
+
+            embed()
+            exit()
+
         pred_tree_nodes.append(
             TreeNode(
                 new_node_id,
@@ -302,6 +312,9 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
             )
         )
         new_node_id += 1
+
+    embed()
+    exit()
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
