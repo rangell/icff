@@ -7,6 +7,7 @@ import argparse
 from collections import defaultdict
 from heapq import heappop, heappush, heapify
 from functools import reduce
+from itertools import product
 
 import numpy as np
 from scipy.sparse import csr_matrix, coo_matrix
@@ -92,55 +93,125 @@ def custom_hac(points, sim_func):
     return Z
 
 
-def intra_subcluster_sim(subcluster, sim_func):
-    assert len(subcluster) > 0
-    if len(subcluster) == 1:
-        return 1.0
-    reps = np.vstack([n.transformed_rep for n in subcluster]
+def intra_subcluster_energy(subcluster, sim_func):
+    subcluster_leaves = subcluster.get_leaves()
+    assert len(subcluster_leaves) > 0
+    if len(subcluster_leaves) == 1:
+        return 0.0
+    reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
     sim_mx = np.triu(sim_func(reps, reps), k=1)
-    return np.sum(sim_mx)
+    return -1.0 * np.sum(sim_mx)
 
 
 def constraint_satisfaction(subcluster, constraints):
-    constraints_satisfied = []
-    for xi in constraints:
+    constraints_satisfied = {}
+    for i, xi in enumerate(constraints):
         if np.all((subcluster.raw_rep * xi) >= 0):
             assign_aff = (np.sum(xi == subcluster.raw_rep)
                           / np.sum(xi > 0))
-            constraints_satisfied.append((assign_aff, xi))
-        return sorted(constraints_satisfied, key=lambda x : -x[0])
+            constraints_satisfied[i] = (-1.0*assign_aff, xi)
+    return constraints_satisfied
 
 
-def cut_objective(cut_frontier, sim_func, constraints):
-    pass
+def value_node(node, sim_func, constraints, incompat_mx):
+    # compute raw materials
+    intra_energy = intra_subcluster_energy(node, sim_func)
+    satisfy_energies = constraint_satisfaction(node, constraints)
 
+    # fill the value map
+    value_map = {tuple() : (intra_energy, [node], [])}
+    if len(satisfy_energies) > 0:
+        # TODO: resolve max subsets of compatible constraints
+        cnstrt_idxs = list(satisfy_energies.keys())
+        sub_incompat_mx = incompat_mx[np.ix_(cnstrt_idxs, cnstrt_idxs)]
+        if np.any(sub_incompat_mx):
+            logger.info('Hard case')
+            embed()
+            exit()
+        else:
+            agg_energy = sum([v[0] for v in satisfy_energies.values()])
+            value_map[tuple(sorted(satisfy_energies.keys()))] = (
+                intra_energy + agg_energy,
+                [node],
+                [(k, *v) for k, v in satisfy_energies.items()]
+            )
+            embed()
+            exit()
+
+    return value_map
+
+
+def memoize_subcluster(node, sim_func, constraints, incompat_mx):
+    node_map = value_node(node, sim_func, constraints, incompat_mx)
+
+    if len(node.children) > 0:
+        child_maps = [memoize_subcluster(c, sim_func, constraints, incompat_mx)
+                        for c in node.children]
+        assert len(child_maps) == 2 # restrict to binary trees for now
+
+        # resolve child maps
+        resolved_child_map = {}
+        for l_key, r_key in product(*[list(m.keys()) for m in child_maps]):
+            constraint_key = tuple(sorted(list(set(list(l_key)+list(r_key)))))
+            if len(constraint_key) == len(l_key) + len(r_key):
+                # easy case
+                min_val, _, _ = resolved_child_map.get(
+                    constraint_key, (np.inf, None, None)
+                )
+                l_val, l_cut, l_cnstrt = child_maps[0][l_key]
+                r_val, r_cut, r_cnstrt = child_maps[0][r_key]
+                this_val = l_val + r_val
+                if this_val < min_val:
+                    resolved_child_map[constraint_key] = (
+                        this_val,
+                        l_cut + r_cut,
+                        sorted(l_cnstrt + r_cnstrt, key=lambda x : x[0])
+                    )
+            else:
+                # hard case
+                logger.warning('Hard case')
+                embed()
+                exit()
+
+        # return map of min over merged keys of dicts
+        for key, cut_rep in resolved_child_map.items():
+            if key in node_map.keys():
+                if cut_rep[0] < node_map[key][0]:
+                    node_map[key] = resolved_child_map[key]
+            else:
+                node_map[key] = resolved_child_map[key]
+
+    return node_map
+        
 
 def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints):
-    
-    # compute preliminaries for DP
-    for subcluster in pred_tree_nodes:
-        intra_score = intra_subcluster_sim(subcluster, sim_func)
-        constraints_satisfied = constraint_satisfaction(
-            subcluster, constraints
+
+    incompat_mx = None
+    if len(constraints) > 0:
+        Xi = np.vstack(constraints)
+        incompat_mx = np.triu(
+            np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1), k=1
         )
-        subcluster.constraint_score = 0.0
-        subcluster.prelim_constraint = None
-        if len(constraints_satisfied) > 0:
-            out = constraints_satisfied.pop(0) 
-            subcluster.constraint_score, subcluster.prelim_constraint = out
-        subcluster.prelim_score = intra_score + subcluster.constraint_score
 
-    # find max
+    # recursively compute value map of root node
+    assert pred_tree_nodes[-1].parent is None
+    root_value_map = memoize_subcluster(
+        pred_tree_nodes[-1], sim_func, constraints, incompat_mx
+    )
 
+    # pick min cut out of `root_value_map` (minimizing energy)
+    min_cut_keys = [k for k in root_value_map.keys() 
+                        if len(k) == len(constraints)]
+    assert len(min_cut_keys) == 1
+    min_cut_score, min_cut, _ = root_value_map[min_cut_keys[0]]
 
-
-    return max_cut, max_cut_score
+    return min_cut, min_cut_score
 
 
 def cluster_points(leaf_nodes, labels, sim_func, constraints):
     # pull out all of the points
     points = np.vstack([x.transformed_rep for x in leaf_nodes])
-    num_points = points.shape[-1]
+    num_points = points.shape[0]
 
     # run clustering and produce the linkage matrix
     Z = custom_hac(points, sim_func)
@@ -222,6 +293,10 @@ def gen_constraint(gold_entities,
                 ff_mask = np.random.randint(0, 2, size=tgt_gold_ent.size)
                 if np.sum(neg_match_feats * ff_mask) > 0:
                     break
+
+            # NOTE: JUST FOR TESTING
+            ff_mask = np.ones_like(ff_mask)
+
             ff_constraint = (2*tgt_gold_ent - 1) * ff_mask
         else:
             assert num_ent_subsets == 1
@@ -247,8 +322,6 @@ def run_mock_icff(opt,
 
 
     constraints = []
-    # NOTE: JUST FOR TESTING
-    constraints = [2*e - 1 for e in gold_entities]
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
@@ -274,8 +347,11 @@ def run_mock_icff(opt,
         #    num_to_generate=opt.num_constraints_per_round
         #)
 
-        ## update constraints and viable placements
-        #constraints.extend(new_constraints)
+        # NOTE: JUST FOR TESTING
+        new_constraints = [(2*ent - 1) for ent in gold_entities]
+
+        # update constraints and viable placements
+        constraints.extend(new_constraints)
         viable_placements = []
         for xi in constraints:
             compatible_nodes = constraint_compatible_nodes(
