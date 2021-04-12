@@ -109,7 +109,7 @@ def constraint_satisfaction(subcluster, constraints):
         if np.all((subcluster.raw_rep * xi) >= 0):
             assign_aff = (np.sum(xi == subcluster.raw_rep)
                           / np.sum(xi > 0))
-            constraints_satisfied[i] = (-1.0*assign_aff, xi)
+            constraints_satisfied[i] = -1.0*assign_aff
     return constraints_satisfied
 
 
@@ -119,24 +119,22 @@ def value_node(node, sim_func, constraints, incompat_mx):
     satisfy_energies = constraint_satisfaction(node, constraints)
 
     # fill the value map
-    value_map = {tuple() : (intra_energy, [node], [])}
+    value_map = {tuple() : (intra_energy, [node], {})}
     if len(satisfy_energies) > 0:
         # TODO: resolve max subsets of compatible constraints
         cnstrt_idxs = list(satisfy_energies.keys())
         sub_incompat_mx = incompat_mx[np.ix_(cnstrt_idxs, cnstrt_idxs)]
         if np.any(sub_incompat_mx):
-            logger.info('Hard case')
+            logger.info('Hard case 1')
             embed()
             exit()
         else:
-            agg_energy = sum([v[0] for v in satisfy_energies.values()])
+            agg_energy = sum(satisfy_energies.values())
             value_map[tuple(sorted(satisfy_energies.keys()))] = (
                 intra_energy + agg_energy,
                 [node],
-                [(k, *v) for k, v in satisfy_energies.items()]
+                satisfy_energies
             )
-            embed()
-            exit()
 
     return value_map
 
@@ -154,24 +152,41 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
         for l_key, r_key in product(*[list(m.keys()) for m in child_maps]):
             constraint_key = tuple(sorted(list(set(list(l_key)+list(r_key)))))
             if len(constraint_key) == len(l_key) + len(r_key):
-                # easy case
+                # non-overlap case
                 min_val, _, _ = resolved_child_map.get(
                     constraint_key, (np.inf, None, None)
                 )
                 l_val, l_cut, l_cnstrt = child_maps[0][l_key]
-                r_val, r_cut, r_cnstrt = child_maps[0][r_key]
+                r_val, r_cut, r_cnstrt = child_maps[1][r_key]
                 this_val = l_val + r_val
                 if this_val < min_val:
                     resolved_child_map[constraint_key] = (
                         this_val,
                         l_cut + r_cut,
-                        sorted(l_cnstrt + r_cnstrt, key=lambda x : x[0])
+                        l_cnstrt | r_cnstrt
                     )
             else:
-                # hard case
-                logger.warning('Hard case')
-                embed()
-                exit()
+                # overlap case
+                l_val, l_cut, l_cnstrt = child_maps[0][l_key]
+                r_val, r_cut, r_cnstrt = child_maps[1][r_key]
+                bare_val = (l_val - sum(l_cnstrt.values())
+                            + r_val - sum(r_cnstrt.values()))
+                # resolve overlap
+                merged_cnstrt = {
+                    k : min(i for i in (l_cnstrt.get(k), r_cnstrt.get(k)) if i)
+                        for k in l_cnstrt.keys() | r_cnstrt.keys()
+                }
+
+                min_val, _, _ = resolved_child_map.get(
+                    constraint_key, (np.inf, None, None)
+                )
+                this_val = bare_val + sum(merged_cnstrt.values())
+                if this_val < min_val:
+                    resolved_child_map[constraint_key] = (
+                        this_val,
+                        l_cut + r_cut,
+                        merged_cnstrt
+                    )
 
         # return map of min over merged keys of dicts
         for key, cut_rep in resolved_child_map.items():
