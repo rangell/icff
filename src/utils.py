@@ -80,7 +80,7 @@ def create_logger(opt):
     # create logger and set level to debug
     logger = logging.getLogger()
     logger.handlers = []
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
     # create log formatter

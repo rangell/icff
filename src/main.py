@@ -307,10 +307,10 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
     adj_mut_info = adj_mi(pred_labels, labels)
 
     metrics = {
-        'dp' : dp,
-        'adj_rand_idx' : adj_rand_idx,
-        'adj_mut_info' : adj_mut_info,
-        'cut_obj_score' : cut_obj_score
+        'dp' : round(dp, 4),
+        'adj_rand_idx' : round(adj_rand_idx, 4),
+        'adj_mut_info' : round(adj_mut_info, 4),
+        'cut_obj_score' : round(cut_obj_score, 4)
     }
 
     return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
@@ -331,7 +331,7 @@ def gen_constraint(gold_entities,
         num_ent_subsets = np.sum(is_ent_subsets)
         assert num_ent_subsets < 2
         if num_ent_subsets == 0:
-            logger.info('****** SPLIT CONSTRAINT ******')
+            logger.debug('****** SPLIT CONSTRAINT ******')
             # split required (NOTE: there might be a better way to do this...)
             tgt_ent_idx = np.argmax(np.sum(feat_intersect, axis=1))
             tgt_gold_ent = gold_entities[tgt_ent_idx]
@@ -342,7 +342,7 @@ def gen_constraint(gold_entities,
                     break
             ff_constraint = (2*tgt_gold_ent - 1) * ff_mask
         else:
-            logger.info('****** MERGE CONSTRAINT ******')
+            logger.debug('****** MERGE CONSTRAINT ******')
             assert num_ent_subsets == 1
             # merge required
             super_gold_ent = gold_entities[np.argmax(is_ent_subsets)]
@@ -367,17 +367,20 @@ def run_mock_icff(opt,
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
     for r in range(opt.max_rounds):
+        logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(
             leaves, mention_labels, sim_func, constraints
         )
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
+        logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
+        logger.debug('*** START - Generating Constraints ***')
         # generate constraints and viable places given predictions
         new_constraints = gen_constraint(
             gold_entities,
@@ -386,10 +389,12 @@ def run_mock_icff(opt,
             sim_func,
             num_to_generate=opt.num_constraints_per_round
         )
+        logger.debug('*** END - Generating Constraints ***')
 
         ## NOTE: JUST FOR TESTING
         #new_constraints = [(2*ent - 1) for ent in gold_entities]
 
+        logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
         constraints.extend(new_constraints)
         viable_placements = []
@@ -400,7 +405,9 @@ def run_mock_icff(opt,
             viable_placements.append(
                     sorted(compatible_nodes, key=lambda x: -x[0])
             )
+        logger.debug('*** END - Computing Viable Placements ***')
 
+        logger.debug('*** START - Assigning Constraints ***')
         # solve structured prediction problem of jointly placing the constraints
         placements_out = match_constraints(
             constraints,
@@ -410,7 +417,9 @@ def run_mock_icff(opt,
         )
         assert placements_out is not None
         _, resolved_placements = placements_out
+        logger.debug('*** END - Assigning Constraints ***')
 
+        logger.debug('*** START - Projecting Assigned Constraints ***')
         # reset all leaf transformed_rep's
         for node in leaves:
             node.transformed_rep = copy.deepcopy(node.raw_rep)
@@ -419,6 +428,7 @@ def run_mock_icff(opt,
         for xi, rp in zip(constraints, resolved_placements):
             for node in rp.get_leaves():
                 node.transformed_rep |= xi
+        logger.debug('*** END - Projecting Assigned Constraints ***')
 
     embed()
     exit()
