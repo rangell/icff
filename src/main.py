@@ -121,14 +121,25 @@ def value_node(node, sim_func, constraints, incompat_mx):
     # fill the value map
     value_map = {tuple() : (intra_energy, [node], {})}
     if len(satisfy_energies) > 0:
-        # TODO: resolve max subsets of compatible constraints
+        # resolve max subsets of compatible constraints
         cnstrt_idxs = list(satisfy_energies.keys())
         sub_incompat_mx = incompat_mx[np.ix_(cnstrt_idxs, cnstrt_idxs)]
-        if np.any(sub_incompat_mx):
-            logger.info('Hard case 1')
-            embed()
-            exit()
-        else:
+        if np.any(sub_incompat_mx): # hard case: not every valid constraint is compatible
+            # get masks of all valid maximal subsets from cnstrt_idxs
+            max_ss_idxs = ~np.unique(
+                sub_incompat_mx[np.any(sub_incompat_mx, axis=0)], axis=0
+            )
+            for ss in max_ss_idxs:
+                ss_cnstrt_idxs = np.asarray(cnstrt_idxs)[np.where(ss)[0]]
+                ss_cnstrt_energy = sum(
+                    [satisfy_energies[k] for k in ss_cnstrt_idxs]
+                )
+                value_map[tuple(ss_cnstrt_idxs)] = (
+                    intra_energy + ss_cnstrt_energy,
+                    [node],
+                    {k : satisfy_energies[k] for k in ss_cnstrt_idxs}
+                )
+        else: # easy case: every valid constraint is compatible
             agg_energy = sum(satisfy_energies.values())
             value_map[tuple(sorted(satisfy_energies.keys()))] = (
                 intra_energy + agg_energy,
@@ -188,6 +199,8 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
                         merged_cnstrt
                     )
 
+        # TODO: check subsets?
+
         # return map of min over merged keys of dicts
         for key, cut_rep in resolved_child_map.items():
             if key in node_map.keys():
@@ -204,9 +217,7 @@ def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints):
     incompat_mx = None
     if len(constraints) > 0:
         Xi = np.vstack(constraints)
-        incompat_mx = np.triu(
-            np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1), k=1
-        )
+        incompat_mx = np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1)
 
     # recursively compute value map of root node
     assert pred_tree_nodes[-1].parent is None
@@ -300,7 +311,8 @@ def gen_constraint(gold_entities,
         num_ent_subsets = np.sum(is_ent_subsets)
         assert num_ent_subsets < 2
         if num_ent_subsets == 0:
-            # split required (note: there might be a better way to do this...)
+            logger.info('****** SPLIT CONSTRAINT ******')
+            # split required (NOTE: there might be a better way to do this...)
             tgt_ent_idx = np.argmax(np.sum(feat_intersect, axis=1))
             tgt_gold_ent = gold_entities[tgt_ent_idx]
             neg_match_feats = (feat_intersect[tgt_ent_idx] == False)
@@ -308,20 +320,13 @@ def gen_constraint(gold_entities,
                 ff_mask = np.random.randint(0, 2, size=tgt_gold_ent.size)
                 if np.sum(neg_match_feats * ff_mask) > 0:
                     break
-
-            # NOTE: JUST FOR TESTING
-            ff_mask = np.ones_like(ff_mask)
-
             ff_constraint = (2*tgt_gold_ent - 1) * ff_mask
         else:
+            logger.info('****** MERGE CONSTRAINT ******')
             assert num_ent_subsets == 1
             # merge required
             super_gold_ent = gold_entities[np.argmax(is_ent_subsets)]
             ff_mask = np.random.randint(0, 2, size=super_gold_ent.size)
-            
-            # NOTE: JUST FOR TESTING
-            ff_mask = np.ones_like(ff_mask)
-
             ff_constraint = (2*super_gold_ent - 1) * ff_mask
 
         constraints.append(ff_constraint)
@@ -353,17 +358,17 @@ def run_mock_icff(opt,
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        ## generate constraints and viable places given predictions
-        #new_constraints = gen_constraint(
-        #    gold_entities,
-        #    pred_canon_ents,
-        #    pred_tree_nodes,
-        #    sim_func,
-        #    num_to_generate=opt.num_constraints_per_round
-        #)
+        # generate constraints and viable places given predictions
+        new_constraints = gen_constraint(
+            gold_entities,
+            pred_canon_ents,
+            pred_tree_nodes,
+            sim_func,
+            num_to_generate=opt.num_constraints_per_round
+        )
 
-        # NOTE: JUST FOR TESTING
-        new_constraints = [(2*ent - 1) for ent in gold_entities]
+        ## NOTE: JUST FOR TESTING
+        #new_constraints = [(2*ent - 1) for ent in gold_entities]
 
         # update constraints and viable placements
         constraints.extend(new_constraints)
@@ -394,6 +399,9 @@ def run_mock_icff(opt,
         for xi, rp in zip(constraints, resolved_placements):
             for node in rp.get_leaves():
                 node.transformed_rep |= xi
+
+    embed()
+    exit()
 
 
 
