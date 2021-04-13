@@ -199,8 +199,6 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
                         merged_cnstrt
                     )
 
-        # TODO: check subsets?
-
         # return map of min over merged keys of dicts
         for key, cut_rep in resolved_child_map.items():
             if key in node_map.keys():
@@ -208,6 +206,28 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
                     node_map[key] = resolved_child_map[key]
             else:
                 node_map[key] = resolved_child_map[key]
+
+    # check supersets
+    node_map_keys = sorted(node_map.keys(), key=lambda k : len(k))
+    for supset_key in node_map_keys:
+        for subset_key in node_map_keys:
+            if len(subset_key) >= len(supset_key):
+                break
+            if subset_key not in node_map.keys(): # we're deleting some of the keys
+                continue
+
+            # check to see whether or not we should delete subset_key
+            supset_val, supset_cut, supset_cnstrt = node_map[supset_key]
+            subset_val, subset_cut, subset_cnstrt = node_map[subset_key]
+            supset_cmp_val = supset_val - sum(
+                [v for k, v in supset_cnstrt.items() 
+                    if k not in subset_cnstrt.keys()]
+            )
+            if supset_cmp_val >= subset_val:
+                continue
+            else:
+                # don't need subset key anymore
+                del node_map[subset_key]
 
     return node_map
         
