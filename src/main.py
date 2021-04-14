@@ -359,8 +359,6 @@ def run_mock_icff(opt,
                   mentions,
                   mention_labels,
                   sim_func):
-
-
     constraints = []
 
     # construct tree node objects for leaves
