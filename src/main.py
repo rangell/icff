@@ -28,9 +28,6 @@ from IPython import embed
 
 logger = logging.getLogger(__name__)
 
-# TODO:
-# - add wandb for larger experiments
-# - 
 
 def custom_hac(points, sim_func):
     level_set = points.astype(float)
