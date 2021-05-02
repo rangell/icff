@@ -5,7 +5,7 @@ form of "there-exists" constraints.
 
 # Usage
 
-```python
+```bash
 python src/main.py [OPTIONS]
 ```
 
