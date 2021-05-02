@@ -1,5 +1,13 @@
-# icff
-Interactive Clustering with Feature Feedback
+# Interactive Clustering with Feature Feedback
+
+Proof-of-concept interactive clustering algorithm with user feedback in the
+form of "there-exists" constraints.
+
+# Usage
+
+```python
+python src/main.py [OPTIONS]
+```
 
 # TODO
 - Add more parameters to data generation
