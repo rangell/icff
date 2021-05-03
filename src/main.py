@@ -287,19 +287,21 @@ def cluster_points(leaf_nodes,
         lchild, rchild = int(merger[0]), int(merger[1])
         lc_tr = pred_tree_nodes[lchild].transformed_rep
         rc_tr = pred_tree_nodes[rchild].transformed_rep
-        new_transformed_rep = lc_tr | rc_tr
 
-        embed()
-        exit()
-
-        if np.any(new_transformed_rep < 0): # if invalid merger
+        if np.any(np.abs(lc_tr - rc_tr) == 2): # if invalid merger
             new_transformed_rep = np.ones_like(lc_tr) * -np.inf
+        else:
+            new_transformed_rep = lc_tr | rc_tr
+
+        if len(constraints) > 0:
+            embed()
+            exit()
 
         pred_tree_nodes.append(
             TreeNode(
                 new_node_id,
                 pred_tree_nodes[lchild].raw_rep | pred_tree_nodes[rchild].raw_rep,
-                transformed_rep=(pred_tree_nodes[lchild].transformed_rep | pred_tree_nodes[rchild].transformed_rep),
+                transformed_rep=new_transformed_rep,
                 children=[pred_tree_nodes[lchild], pred_tree_nodes[rchild]]
             )
         )

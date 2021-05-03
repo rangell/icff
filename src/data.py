@@ -19,10 +19,11 @@ def gen_data(opt):
     for ent_idx in range(num_entities):
         tmp_ent = np.zeros(dim, dtype=int)
         tmp_ent[ent_idx*block_size:(ent_idx+1)*block_size] = 1
-        noise = (
-            np.random.uniform(0, 1, size=tmp_ent.shape) < entity_noise_prob
-        ).astype(int)
-        tmp_ent |= noise
+        noise_domain = np.where(tmp_ent == 0)[0]
+        noise_mask = (np.random.uniform(0, 1, size=noise_domain.shape)
+                      < entity_noise_prob)
+        noise_idx = noise_domain[noise_mask]
+        tmp_ent[noise_idx] = 1
         entities.append(tmp_ent)
     entities = np.vstack(entities)
 
@@ -35,10 +36,12 @@ def gen_data(opt):
         ent_idx = random.randint(0, num_entities-1)
         mention_labels.append(ent_idx)
         while True:
-            ent_mask = (
-                np.random.uniform(0, 1, size=tmp_ent.shape) < mention_sample_prob
-            ).astype(int)
-            sample_mention = ent_mask & entities[ent_idx]
+            ent_feat_domain = np.where(entities[ent_idx] == 1)[0]
+            ent_feat_mask = (np.random.uniform(0, 1, size=ent_feat_domain.shape)
+                             < mention_sample_prob)
+            ent_feat_idx = ent_feat_domain[ent_feat_mask]
+            sample_mention = np.zeros_like(entities[ent_idx])
+            sample_mention[ent_feat_idx] = 1
             subsets = np.all((sample_mention & entities) == sample_mention, axis=1)
             if subsets[ent_idx] and np.sum(subsets) == 1:
                 mentions.append(sample_mention)
