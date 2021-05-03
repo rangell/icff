@@ -96,6 +96,8 @@ def intra_subcluster_energy(subcluster, sim_func):
     if len(subcluster_leaves) == 1:
         return 0.0
     reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
+    embed()
+    exit()
     sim_mx = np.triu(sim_func(reps, reps), k=1)
     return -1.0 * np.sum(sim_mx)
 
@@ -443,19 +445,28 @@ def get_opt():
                         help="The output directory for this run.")
     parser.add_argument("--data_dir", default=None, type=str,
                         help="The directory where data is stored.")
+
     parser.add_argument('--num_entities', type=int, default=2,
                         help="number of entities to generate when generating"\
                              "synthetic data")
     parser.add_argument('--num_mentions', type=int, default=10,
                         help="number of mentions to generate when generating"\
                              "synthetic data")
+    parser.add_argument('--data_dim', type=int, default=16,
+                        help="number of possible features (i.e. dimension of"\
+                             "vector representation of points")
+    parser.add_argument('--entity_noise_prob', type=float, default=0.2,
+                        help="probability of noise features added to entity")
+    parser.add_argument('--mention_sample_prob', type=float, default=0.7,
+                        help="proportion of entity features added to mention")
+
+    parser.add_argument('--cost_per_cluster', type=float, default=0.5,
+                        help="proportion of entity features added to mention")
+
     parser.add_argument('--max_rounds', type=int, default=100,
                         help="number of rounds to generate feedback for")
     parser.add_argument('--num_constraints_per_round', type=int, default=1,
                         help="number of constraints to generate per round")
-    parser.add_argument('--data_dim', type=int, default=16,
-                        help="number of possible features (i.e. dimension of"\
-                             "vector representation of points")
 
     opt = parser.parse_args()
 
@@ -478,18 +489,18 @@ def main():
     initialize_exp(opt)
 
     # get or create the synthetic data
-    data_fname = '{}/synth_data-{}_{}_{}-{}.pkl'.format(
+    data_fname = '{}/synth_data-{}_{}_{}_{}_{}-{}.pkl'.format(
         opt.data_dir,
         opt.num_entities,
         opt.num_mentions,
         opt.data_dim,
+        opt.entity_noise_prob,
+        opt.mention_sample_prob,
         opt.seed
     )
     if not os.path.exists(data_fname):
         with open(data_fname, 'wb') as f:
-            gold_entities, mentions, mention_labels = gen_data(
-                    opt.num_entities, opt.num_mentions, opt.data_dim
-            )
+            gold_entities, mentions, mention_labels = gen_data(opt)
             pickle.dump((gold_entities, mentions, mention_labels), f)
     else:
         with open(data_fname, 'rb') as f:

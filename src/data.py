@@ -1,14 +1,27 @@
 import random
 import numpy as np
 
+from IPython import embed
 
-def gen_data(num_entities, num_mentions, dim):
+
+def gen_data(opt):
+    
+    # data generation hyperparameters
+    num_entities = opt.num_entities
+    num_mentions = opt.num_mentions
+    dim = opt.data_dim
+    entity_noise_prob = opt.entity_noise_prob
+    mention_sample_prob = opt.mention_sample_prob
+
+    # generate the entities
     entities, mentions, mention_labels = [], [], []
     block_size = dim // num_entities
     for ent_idx in range(num_entities):
         tmp_ent = np.zeros(dim, dtype=int)
         tmp_ent[ent_idx*block_size:(ent_idx+1)*block_size] = 1
-        noise = (np.random.randint(0, 10, size=tmp_ent.shape) < 4).astype(int)
+        noise = (
+            np.random.uniform(0, 1, size=tmp_ent.shape) < entity_noise_prob
+        ).astype(int)
         tmp_ent |= noise
         entities.append(tmp_ent)
     entities = np.vstack(entities)
@@ -17,11 +30,14 @@ def gen_data(num_entities, num_mentions, dim):
     assert np.all(np.argmax(entities @ entities.T, axis=1)
                   == np.array(range(entities.shape[0])))
 
+    # generate the mentions
     for _ in range(num_mentions):
         ent_idx = random.randint(0, num_entities-1)
         mention_labels.append(ent_idx)
         while True:
-            ent_mask = (np.random.randint(0, 10, size=tmp_ent.shape) < 4).astype(int)
+            ent_mask = (
+                np.random.uniform(0, 1, size=tmp_ent.shape) < mention_sample_prob
+            ).astype(int)
             sample_mention = ent_mask & entities[ent_idx]
             subsets = np.all((sample_mention & entities) == sample_mention, axis=1)
             if subsets[ent_idx] and np.sum(subsets) == 1:

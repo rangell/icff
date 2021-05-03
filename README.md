@@ -9,8 +9,11 @@ form of "there-exists" constraints.
 python src/main.py [OPTIONS]
 ```
 
-# TODO
+# Done
 - Add more parameters to data generation
+
+
+# TODO
 - Fix cut objective to match the paper
 - Fix feedback generation
 - Must and shouldn't link constraints
