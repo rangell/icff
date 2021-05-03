@@ -13,5 +13,5 @@ python src/main.py\
     --num_constraints_per_round=1\
     --entity_noise_prob=0.0\
     --mention_sample_prob=0.4\
-    --cost_per_cluster=10.0\
+    --cost_per_cluster=1.5\
     --debug

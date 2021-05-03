@@ -15,6 +15,7 @@ from scipy.cluster.hierarchy import fcluster
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
 
+from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
 from match import match_constraints, lca_check, viable_match_check
 from metrics import dendrogram_purity
@@ -93,26 +94,32 @@ def custom_hac(points, sim_func):
 def intra_subcluster_energy(subcluster, sim_func):
     subcluster_leaves = subcluster.get_leaves()
     assert len(subcluster_leaves) > 0
-    reps = np.vstack([n.raw_rep for n in subcluster_leaves])
+    if len(subcluster_leaves) == 1:
+        return 0.0
+    reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
     canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
     rep_affinities = sim_func(reps, canon_rep)
     return np.mean(rep_affinities)
 
 
-def constraint_satisfaction(subcluster, constraints):
+def constraint_satisfaction(node, compat_func, constraints):
     constraints_satisfied = {}
     for i, xi in enumerate(constraints):
-        if np.all((subcluster.raw_rep * xi) >= 0):
-            assign_aff = (np.sum(xi == subcluster.raw_rep)
-                          / np.sum(xi > 0))
-            constraints_satisfied[i] = assign_aff
+        compat_score = compat_func(node, xi)
+        if compat_score > 0:
+            constraints_satisfied[i] = compat_score
     return constraints_satisfied
 
 
-def value_node(node, sim_func, constraints, incompat_mx, cost_per_cluster):
+def value_node(node,
+               sim_func,
+               compat_func,
+               constraints,
+               incompat_mx,
+               cost_per_cluster):
     # compute raw materials
     intra_energy = intra_subcluster_energy(node, sim_func) - cost_per_cluster
-    satisfy_energies = constraint_satisfaction(node, constraints)
+    satisfy_energies = constraint_satisfaction(node, compat_func, constraints)
 
     # fill the value map
     value_map = {tuple() : (intra_energy, [node], {})}
@@ -148,17 +155,19 @@ def value_node(node, sim_func, constraints, incompat_mx, cost_per_cluster):
 
 def memoize_subcluster(node,
                        sim_func,
+                       compat_func,
                        constraints,
                        incompat_mx,
                        cost_per_cluster):
 
     node_map = value_node(
-        node, sim_func, constraints, incompat_mx, cost_per_cluster
+        node, sim_func, compat_func, constraints, incompat_mx, cost_per_cluster
     )
 
     if len(node.children) > 0:
         child_maps = [memoize_subcluster(c, 
                                          sim_func,
+                                         compat_func,
                                          constraints,
                                          incompat_mx,
                                          cost_per_cluster)
@@ -177,7 +186,7 @@ def memoize_subcluster(node,
                 l_val, l_cut, l_cnstrt = child_maps[0][l_key]
                 r_val, r_cut, r_cnstrt = child_maps[1][r_key]
                 this_val = l_val + r_val
-                if this_val > max_val:
+                if this_val >= max_val:
                     resolved_child_map[constraint_key] = (
                         this_val,
                         l_cut + r_cut,
@@ -199,12 +208,17 @@ def memoize_subcluster(node,
                     constraint_key, (-np.inf, None, None)
                 )
                 this_val = bare_val + sum(merged_cnstrt.values())
-                if this_val > max_val:
+                if this_val >= max_val:
                     resolved_child_map[constraint_key] = (
                         this_val,
                         l_cut + r_cut,
                         merged_cnstrt
                     )
+
+
+        #if len(constraints) > 0 and node.uid == 16:
+        #    embed()
+        #    exit()
 
         # return map of max over merged keys of dicts
         for key, cut_rep in resolved_child_map.items():
@@ -239,7 +253,11 @@ def memoize_subcluster(node,
     return node_map
         
 
-def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints, cost_per_cluster):
+def get_opt_tree_cut(pred_tree_nodes,
+                     sim_func,
+                     compat_func,
+                     constraints,
+                     cost_per_cluster):
 
     incompat_mx = None
     if len(constraints) > 0:
@@ -251,6 +269,7 @@ def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints, cost_per_cluster):
     root_value_map = memoize_subcluster(
         pred_tree_nodes[-1],
         sim_func,
+        compat_func,
         constraints,
         incompat_mx,
         cost_per_cluster
@@ -268,6 +287,7 @@ def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints, cost_per_cluster):
 def cluster_points(leaf_nodes,
                    labels,
                    sim_func,
+                   compat_func,
                    constraints,
                    cost_per_cluster):
     # pull out all of the points
@@ -308,7 +328,7 @@ def cluster_points(leaf_nodes,
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        pred_tree_nodes, sim_func, constraints, cost_per_cluster
+        pred_tree_nodes, sim_func, compat_func, constraints, cost_per_cluster
     )
 
     # the predicted entities canonicalization
@@ -371,8 +391,6 @@ def gen_constraint(gold_entities,
 
                 if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
                     break
-
-
         else:
             logger.debug('****** MERGE CONSTRAINT ******')
             assert num_ent_subsets == 1
@@ -400,7 +418,8 @@ def run_mock_icff(opt,
                   gold_entities,
                   mentions,
                   mention_labels,
-                  sim_func):
+                  sim_func,
+                  compat_func):
     constraints = []
 
     # construct tree node objects for leaves
@@ -410,7 +429,12 @@ def run_mock_icff(opt,
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(
-            leaves, mention_labels, sim_func, constraints, opt.cost_per_cluster
+            leaves,
+            mention_labels,
+            sim_func,
+            compat_func,
+            constraints,
+            opt.cost_per_cluster
         )
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
         logger.debug('*** END - Clustering Points ***')
@@ -446,7 +470,7 @@ def run_mock_icff(opt,
         viable_placements = []
         for xi in constraints:
             compatible_nodes = constraint_compatible_nodes(
-                pred_tree_nodes, xi, sim_func
+                pred_tree_nodes, xi, compat_func
             )
             viable_placements.append(
                 sorted(
@@ -561,9 +585,12 @@ def main():
 
     # declare similarity function with function pointer
     sim_func = jaccard_sim
+    compat_func = transformed_overlap
 
     # run the core function
-    run_mock_icff(opt, gold_entities, mentions, mention_labels, sim_func)
+    run_mock_icff(
+        opt, gold_entities, mentions, mention_labels, sim_func, compat_func
+    )
 
 
 if __name__ == '__main__':

@@ -3,18 +3,12 @@ import numpy as np
 from IPython import embed
 
 
-def constraint_compatible_nodes(nodes, ff_constraint, sim_func):
+def constraint_compatible_nodes(nodes, ff_constraint, compat_func):
     compatible_nodes = []
     for node in nodes:
-        feat_alignment = node.transformed_rep * ff_constraint
-        num_overlap = np.sum(feat_alignment > 0)
-        num_violate = np.sum(feat_alignment < 0)
-        if num_violate == 0 and num_overlap > 0:
-            # NOTE: should this use the raw or transformed representation?
-            #affinity = sim_func(node.raw_rep[None,:],
-            #                    ff_constraint[None,:])[0][0]
-            affinity = num_overlap / np.sum(ff_constraint != 0)
-            compatible_nodes.append((affinity, node))
+        compat_score = compat_func(node, ff_constraint)
+        if compat_score > 0:
+            compatible_nodes.append((compat_score, node))
     return compatible_nodes
 
 
