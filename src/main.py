@@ -575,7 +575,7 @@ def main():
 
     # declare similarity function with function pointer
     sim_func = cos_sim
-    compat_func = transformed_overlap
+    compat_func = raw_overlap
 
     # run the core function
     run_mock_icff(
