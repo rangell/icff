@@ -236,8 +236,6 @@ def memoize_subcluster(node,
                 # don't need subset key anymore
                 del node_map[subset_key]
 
-    print(node_map)
-
     return node_map
         
 
@@ -287,15 +285,16 @@ def cluster_points(leaf_nodes,
         lchild, rchild = int(merger[0]), int(merger[1])
         lc_tr = pred_tree_nodes[lchild].transformed_rep
         rc_tr = pred_tree_nodes[rchild].transformed_rep
+        
+        default_conflict_tr = np.ones_like(lc_tr) * -np.inf
 
-        if np.any(np.abs(lc_tr - rc_tr) == 2): # if invalid merger
-            new_transformed_rep = np.ones_like(lc_tr) * -np.inf
+        # if invalid merger
+        if np.array_equal(default_conflict_tr, lc_tr)\
+                or np.array_equal(default_conflict_tr, rc_tr)\
+                or np.any(np.abs(lc_tr - rc_tr) == 2):
+            new_transformed_rep = default_conflict_tr
         else:
             new_transformed_rep = lc_tr | rc_tr
-
-        if len(constraints) > 0:
-            embed()
-            exit()
 
         pred_tree_nodes.append(
             TreeNode(
@@ -314,7 +313,7 @@ def cluster_points(leaf_nodes,
 
     # the predicted entities canonicalization
     pred_canon_ents = np.vstack(
-        [n.transformed_rep for n in cut_frontier_nodes]
+        [n.raw_rep for n in cut_frontier_nodes]
     )
 
     # produce the predicted labels for leaves
@@ -342,9 +341,10 @@ def cluster_points(leaf_nodes,
 def gen_constraint(gold_entities,
                    pred_canon_ents,
                    pred_tree_nodes,
+                   constraints,
                    sim_func,
                    num_to_generate=1):
-    constraints = []
+
     for _ in range(num_to_generate):
         # randomly generate valid feedback in the form of there-exists constraints
         pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
@@ -355,22 +355,41 @@ def gen_constraint(gold_entities,
         assert num_ent_subsets < 2
         if num_ent_subsets == 0:
             logger.debug('****** SPLIT CONSTRAINT ******')
-            # split required (NOTE: there might be a better way to do this...)
+            # split required
             tgt_ent_idx = np.argmax(np.sum(feat_intersect, axis=1))
             tgt_gold_ent = gold_entities[tgt_ent_idx]
-            neg_match_feats = (feat_intersect[tgt_ent_idx] == False)
+            neg_match_feats = (feat_intersect[tgt_ent_idx] == False).astype(int)
+
             while True:
-                ff_mask = np.random.randint(0, 2, size=tgt_gold_ent.size)
-                if np.sum(neg_match_feats * ff_mask) > 0:
+                ff_constraint = np.zeros_like(tgt_gold_ent)
+                in_pred_domain = np.where(ff_pred_ent & tgt_gold_ent == 1)[0]
+                out_pred_domain = np.where(neg_match_feats != 0)[0]
+                in_idx = np.random.randint(in_pred_domain.size)
+                out_idx = np.random.randint(out_pred_domain.size)
+                ff_constraint[in_pred_domain[in_idx]] = 1
+                ff_constraint[out_pred_domain[out_idx]] = -1
+
+                if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
                     break
-            ff_constraint = (2*tgt_gold_ent - 1) * ff_mask
+
+
         else:
             logger.debug('****** MERGE CONSTRAINT ******')
             assert num_ent_subsets == 1
             # merge required
-            super_gold_ent = gold_entities[np.argmax(is_ent_subsets)]
-            ff_mask = np.random.randint(0, 2, size=super_gold_ent.size)
-            ff_constraint = (2*super_gold_ent - 1) * ff_mask
+            super_gold_ent = 2*gold_entities[np.argmax(is_ent_subsets)]-1
+
+            while True:
+                ff_constraint = np.zeros_like(super_gold_ent)
+                in_pred_domain = np.where(ff_pred_ent == 1)[0]
+                out_pred_domain = np.where((super_gold_ent ^ ff_pred_ent) != 0)[0]
+                in_idx = np.random.randint(in_pred_domain.size)
+                out_idx = np.random.randint(out_pred_domain.size)
+                ff_constraint[in_pred_domain[in_idx]] = 1
+                ff_constraint[out_pred_domain[out_idx]] = super_gold_ent[out_pred_domain[out_idx]]
+
+                if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
+                    break
 
         constraints.append(ff_constraint)
 
@@ -397,34 +416,44 @@ def run_mock_icff(opt,
         logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
+
+        if r == 1:
+            embed()
+            exit()
+
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        logger.debug('*** START - Generating Constraints ***')
-        # generate constraints and viable places given predictions
-        new_constraints = gen_constraint(
-            gold_entities,
-            pred_canon_ents,
-            pred_tree_nodes,
-            sim_func,
-            num_to_generate=opt.num_constraints_per_round
-        )
-        logger.debug('*** END - Generating Constraints ***')
+
+        #logger.debug('*** START - Generating Constraints ***')
+        ## generate constraints and viable places given predictions
+        #constraints = gen_constraint(
+        #    gold_entities,
+        #    pred_canon_ents,
+        #    pred_tree_nodes,
+        #    constraints,
+        #    sim_func,
+        #    num_to_generate=opt.num_constraints_per_round
+        #)
+        #logger.debug('*** END - Generating Constraints ***')
 
         ## NOTE: JUST FOR TESTING
-        #new_constraints = [(2*ent - 1) for ent in gold_entities]
+        constraints = [(2*ent - 1) for ent in gold_entities]
 
         logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
-        constraints.extend(new_constraints)
         viable_placements = []
         for xi in constraints:
             compatible_nodes = constraint_compatible_nodes(
                 pred_tree_nodes, xi, sim_func
             )
             viable_placements.append(
-                    sorted(compatible_nodes, key=lambda x: -x[0])
+                sorted(
+                    compatible_nodes,
+                    key=lambda x: (x[0], x[1].uid),
+                    reverse=True
+                )
             )
         logger.debug('*** END - Computing Viable Placements ***')
 
@@ -531,7 +560,7 @@ def main():
             gold_entities, mentions, mention_labels = pickle.load(f)
 
     # declare similarity function with function pointer
-    sim_func = cos_sim
+    sim_func = jaccard_sim
 
     # run the core function
     run_mock_icff(opt, gold_entities, mentions, mention_labels, sim_func)

@@ -9,9 +9,9 @@ python src/main.py\
     --num_entities=2\
     --num_mentions=10\
     --data_dim=16\
-    --max_rounds=50\
+    --max_rounds=100\
     --num_constraints_per_round=1\
-    --entity_noise_prob=0.3\
-    --mention_sample_prob=0.6\
-    --cost_per_cluster=1.0\
+    --entity_noise_prob=0.0\
+    --mention_sample_prob=0.4\
+    --cost_per_cluster=10.0\
     --debug
