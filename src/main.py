@@ -93,13 +93,10 @@ def custom_hac(points, sim_func):
 def intra_subcluster_energy(subcluster, sim_func):
     subcluster_leaves = subcluster.get_leaves()
     assert len(subcluster_leaves) > 0
-    if len(subcluster_leaves) == 1:
-        return 0.0
-    reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
-    embed()
-    exit()
-    sim_mx = np.triu(sim_func(reps, reps), k=1)
-    return -1.0 * np.sum(sim_mx)
+    reps = np.vstack([n.raw_rep for n in subcluster_leaves])
+    canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
+    rep_affinities = sim_func(reps, canon_rep)
+    return np.mean(rep_affinities)
 
 
 def constraint_satisfaction(subcluster, constraints):
@@ -108,13 +105,13 @@ def constraint_satisfaction(subcluster, constraints):
         if np.all((subcluster.raw_rep * xi) >= 0):
             assign_aff = (np.sum(xi == subcluster.raw_rep)
                           / np.sum(xi > 0))
-            constraints_satisfied[i] = -1.0*assign_aff
+            constraints_satisfied[i] = assign_aff
     return constraints_satisfied
 
 
-def value_node(node, sim_func, constraints, incompat_mx):
+def value_node(node, sim_func, constraints, incompat_mx, cost_per_cluster):
     # compute raw materials
-    intra_energy = intra_subcluster_energy(node, sim_func)
+    intra_energy = intra_subcluster_energy(node, sim_func) - cost_per_cluster
     satisfy_energies = constraint_satisfaction(node, constraints)
 
     # fill the value map
@@ -149,11 +146,22 @@ def value_node(node, sim_func, constraints, incompat_mx):
     return value_map
 
 
-def memoize_subcluster(node, sim_func, constraints, incompat_mx):
-    node_map = value_node(node, sim_func, constraints, incompat_mx)
+def memoize_subcluster(node,
+                       sim_func,
+                       constraints,
+                       incompat_mx,
+                       cost_per_cluster):
+
+    node_map = value_node(
+        node, sim_func, constraints, incompat_mx, cost_per_cluster
+    )
 
     if len(node.children) > 0:
-        child_maps = [memoize_subcluster(c, sim_func, constraints, incompat_mx)
+        child_maps = [memoize_subcluster(c, 
+                                         sim_func,
+                                         constraints,
+                                         incompat_mx,
+                                         cost_per_cluster)
                         for c in node.children]
         assert len(child_maps) == 2 # restrict to binary trees for now
 
@@ -163,13 +171,13 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
             constraint_key = tuple(sorted(list(set(list(l_key)+list(r_key)))))
             if len(constraint_key) == len(l_key) + len(r_key):
                 # non-overlap case
-                min_val, _, _ = resolved_child_map.get(
-                    constraint_key, (np.inf, None, None)
+                max_val, _, _ = resolved_child_map.get(
+                    constraint_key, (-np.inf, None, None)
                 )
                 l_val, l_cut, l_cnstrt = child_maps[0][l_key]
                 r_val, r_cut, r_cnstrt = child_maps[1][r_key]
                 this_val = l_val + r_val
-                if this_val < min_val:
+                if this_val > max_val:
                     resolved_child_map[constraint_key] = (
                         this_val,
                         l_cut + r_cut,
@@ -183,25 +191,25 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
                             + r_val - sum(r_cnstrt.values()))
                 # resolve overlap
                 merged_cnstrt = {
-                    k : min(i for i in (l_cnstrt.get(k), r_cnstrt.get(k)) if i)
+                    k : max(i for i in (l_cnstrt.get(k), r_cnstrt.get(k)) if i)
                         for k in l_cnstrt.keys() | r_cnstrt.keys()
                 }
 
-                min_val, _, _ = resolved_child_map.get(
-                    constraint_key, (np.inf, None, None)
+                max_val, _, _ = resolved_child_map.get(
+                    constraint_key, (-np.inf, None, None)
                 )
                 this_val = bare_val + sum(merged_cnstrt.values())
-                if this_val < min_val:
+                if this_val > max_val:
                     resolved_child_map[constraint_key] = (
                         this_val,
                         l_cut + r_cut,
                         merged_cnstrt
                     )
 
-        # return map of min over merged keys of dicts
+        # return map of max over merged keys of dicts
         for key, cut_rep in resolved_child_map.items():
             if key in node_map.keys():
-                if cut_rep[0] < node_map[key][0]:
+                if cut_rep[0] > node_map[key][0]:
                     node_map[key] = resolved_child_map[key]
             else:
                 node_map[key] = resolved_child_map[key]
@@ -222,16 +230,18 @@ def memoize_subcluster(node, sim_func, constraints, incompat_mx):
                 [v for k, v in supset_cnstrt.items() 
                     if k not in subset_cnstrt.keys()]
             )
-            if supset_cmp_val >= subset_val:
+            if supset_cmp_val < subset_val:
                 continue
             else:
                 # don't need subset key anymore
                 del node_map[subset_key]
 
+    print(node_map)
+
     return node_map
         
 
-def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints):
+def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints, cost_per_cluster):
 
     incompat_mx = None
     if len(constraints) > 0:
@@ -241,19 +251,27 @@ def get_opt_tree_cut(pred_tree_nodes, sim_func, constraints):
     # recursively compute value map of root node
     assert pred_tree_nodes[-1].parent is None
     root_value_map = memoize_subcluster(
-        pred_tree_nodes[-1], sim_func, constraints, incompat_mx
+        pred_tree_nodes[-1],
+        sim_func,
+        constraints,
+        incompat_mx,
+        cost_per_cluster
     )
 
-    # pick min cut out of `root_value_map` (minimizing energy)
-    min_cut_keys = [k for k in root_value_map.keys() 
+    # pick max cut out of `root_value_map` (maximizing energy)
+    max_cut_keys = [k for k in root_value_map.keys() 
                         if len(k) == len(constraints)]
-    assert len(min_cut_keys) == 1
-    min_cut_score, min_cut, _ = root_value_map[min_cut_keys[0]]
+    assert len(max_cut_keys) == 1
+    max_cut_score, max_cut, _ = root_value_map[max_cut_keys[0]]
 
-    return min_cut, min_cut_score
+    return max_cut, max_cut_score
 
 
-def cluster_points(leaf_nodes, labels, sim_func, constraints):
+def cluster_points(leaf_nodes,
+                   labels,
+                   sim_func,
+                   constraints,
+                   cost_per_cluster):
     # pull out all of the points
     points = np.vstack([x.transformed_rep for x in leaf_nodes])
     num_points = points.shape[0]
@@ -270,6 +288,10 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
         lc_tr = pred_tree_nodes[lchild].transformed_rep
         rc_tr = pred_tree_nodes[rchild].transformed_rep
         new_transformed_rep = lc_tr | rc_tr
+
+        embed()
+        exit()
+
         if np.any(new_transformed_rep < 0): # if invalid merger
             new_transformed_rep = np.ones_like(lc_tr) * -np.inf
 
@@ -285,7 +307,7 @@ def cluster_points(leaf_nodes, labels, sim_func, constraints):
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        pred_tree_nodes, sim_func, constraints
+        pred_tree_nodes, sim_func, constraints, cost_per_cluster
     )
 
     # the predicted entities canonicalization
@@ -367,7 +389,7 @@ def run_mock_icff(opt,
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(
-            leaves, mention_labels, sim_func, constraints
+            leaves, mention_labels, sim_func, constraints, opt.cost_per_cluster
         )
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
         logger.debug('*** END - Clustering Points ***')

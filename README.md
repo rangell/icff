@@ -11,10 +11,10 @@ python src/main.py [OPTIONS]
 
 # Done
 - Add more parameters to data generation
+- Fix cut objective to match the paper
 
 
 # TODO
-- Fix cut objective to match the paper
 - Fix feedback generation
 - Must and shouldn't link constraints
 - Support for real datasets
