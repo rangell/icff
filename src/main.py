@@ -96,7 +96,7 @@ def intra_subcluster_energy(subcluster, sim_func):
     assert len(subcluster_leaves) > 0
     if len(subcluster_leaves) == 1:
         return 0.0
-    reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
+    reps = np.vstack([n.raw_rep for n in subcluster_leaves])
     canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
     rep_affinities = sim_func(reps, canon_rep)
     return np.mean(rep_affinities)
@@ -214,11 +214,6 @@ def memoize_subcluster(node,
                         l_cut + r_cut,
                         merged_cnstrt
                     )
-
-
-        #if len(constraints) > 0 and node.uid == 16:
-        #    embed()
-        #    exit()
 
         # return map of max over merged keys of dicts
         for key, cut_rep in resolved_child_map.items():
@@ -440,30 +435,25 @@ def run_mock_icff(opt,
         logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
-
-        if r == 1:
-            embed()
-            exit()
-
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
 
-        #logger.debug('*** START - Generating Constraints ***')
-        ## generate constraints and viable places given predictions
-        #constraints = gen_constraint(
-        #    gold_entities,
-        #    pred_canon_ents,
-        #    pred_tree_nodes,
-        #    constraints,
-        #    sim_func,
-        #    num_to_generate=opt.num_constraints_per_round
-        #)
-        #logger.debug('*** END - Generating Constraints ***')
+        logger.debug('*** START - Generating Constraints ***')
+        # generate constraints and viable places given predictions
+        constraints = gen_constraint(
+            gold_entities,
+            pred_canon_ents,
+            pred_tree_nodes,
+            constraints,
+            sim_func,
+            num_to_generate=opt.num_constraints_per_round
+        )
+        logger.debug('*** END - Generating Constraints ***')
 
         ## NOTE: JUST FOR TESTING
-        constraints = [(2*ent - 1) for ent in gold_entities]
+        #constraints = [(2*ent - 1) for ent in gold_entities]
 
         logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
@@ -584,7 +574,7 @@ def main():
             gold_entities, mentions, mention_labels = pickle.load(f)
 
     # declare similarity function with function pointer
-    sim_func = jaccard_sim
+    sim_func = cos_sim
     compat_func = transformed_overlap
 
     # run the core function
