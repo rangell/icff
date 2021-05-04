@@ -3,8 +3,9 @@ import numpy as np
 
 def raw_overlap(node, constraint):
     rep = node.raw_rep
-    if np.all((rep * constraint) >= 0):
-        return np.sum(constraint == rep) / np.sum(constraint > 0)
+    pair_product = rep * constraint
+    if np.all((pair_product) >= 0):
+        return np.sum(pair_product > 0) / np.sum(constraint > 0)
     else:
         return -np.inf
 

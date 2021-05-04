@@ -465,7 +465,6 @@ def run_mock_icff(opt,
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-
         logger.debug('*** START - Generating Constraints ***')
         # generate constraints and viable places given predictions
         constraints = gen_constraint(

@@ -11,4 +11,7 @@ python src/main.py\
     --data_dim=256\
     --max_rounds=5\
     --num_constraints_per_round=1\
+    --entity_noise_prob=0.5\
+    --mention_sample_prob=0.3\
+    --cost_per_cluster=0.01\
     --debug
