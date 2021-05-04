@@ -88,26 +88,25 @@ def custom_hac(points, sim_func):
 
     # return the linkage matrix
     Z = np.vstack(Z)
+    
     return Z
 
 
-def intra_subcluster_energy(subcluster, sim_func):
+def intra_subcluster_energy(subcluster, sim_func, num_points):
     subcluster_leaves = subcluster.get_leaves()
     assert len(subcluster_leaves) > 0
-    if len(subcluster_leaves) == 1:
-        return 0.0
     reps = np.vstack([n.raw_rep for n in subcluster_leaves])
     canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
     rep_affinities = sim_func(reps, canon_rep)
-    return np.mean(rep_affinities)
+    return np.sum(rep_affinities) / num_points
 
 
-def constraint_satisfaction(node, compat_func, constraints):
+def constraint_satisfaction(node, compat_func, constraints, num_constraints):
     constraints_satisfied = {}
     for i, xi in enumerate(constraints):
         compat_score = compat_func(node, xi)
         if compat_score > 0:
-            constraints_satisfied[i] = compat_score
+            constraints_satisfied[i] = compat_score / num_constraints
     return constraints_satisfied
 
 
@@ -116,10 +115,15 @@ def value_node(node,
                compat_func,
                constraints,
                incompat_mx,
-               cost_per_cluster):
+               cost_per_cluster,
+               num_points,
+               num_constraints):
     # compute raw materials
-    intra_energy = intra_subcluster_energy(node, sim_func) - cost_per_cluster
-    satisfy_energies = constraint_satisfaction(node, compat_func, constraints)
+    intra_energy = intra_subcluster_energy(node, sim_func, num_points)
+    intra_energy -= cost_per_cluster
+    satisfy_energies = constraint_satisfaction(
+        node, compat_func, constraints, num_constraints
+    )
 
     # fill the value map
     value_map = {tuple() : (intra_energy, [node], {})}
@@ -158,10 +162,19 @@ def memoize_subcluster(node,
                        compat_func,
                        constraints,
                        incompat_mx,
-                       cost_per_cluster):
+                       cost_per_cluster,
+                       num_points,
+                       num_constraints):
 
     node_map = value_node(
-        node, sim_func, compat_func, constraints, incompat_mx, cost_per_cluster
+        node,
+        sim_func,
+        compat_func,
+        constraints,
+        incompat_mx,
+        cost_per_cluster,
+        num_points,
+        num_constraints
     )
 
     if len(node.children) > 0:
@@ -170,7 +183,9 @@ def memoize_subcluster(node,
                                          compat_func,
                                          constraints,
                                          incompat_mx,
-                                         cost_per_cluster)
+                                         cost_per_cluster,
+                                         num_points,
+                                         num_constraints)
                         for c in node.children]
         assert len(child_maps) == 2 # restrict to binary trees for now
 
@@ -252,7 +267,9 @@ def get_opt_tree_cut(pred_tree_nodes,
                      sim_func,
                      compat_func,
                      constraints,
-                     cost_per_cluster):
+                     cost_per_cluster,
+                     num_points,
+                     num_constraints):
 
     incompat_mx = None
     if len(constraints) > 0:
@@ -267,7 +284,9 @@ def get_opt_tree_cut(pred_tree_nodes,
         compat_func,
         constraints,
         incompat_mx,
-        cost_per_cluster
+        cost_per_cluster,
+        num_points,
+        num_constraints
     )
 
     # pick max cut out of `root_value_map` (maximizing energy)
@@ -288,6 +307,7 @@ def cluster_points(leaf_nodes,
     # pull out all of the points
     points = np.vstack([x.transformed_rep for x in leaf_nodes])
     num_points = points.shape[0]
+    num_constraints = len(constraints)
 
     # run clustering and produce the linkage matrix
     Z = custom_hac(points, sim_func)
@@ -323,7 +343,13 @@ def cluster_points(leaf_nodes,
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        pred_tree_nodes, sim_func, compat_func, constraints, cost_per_cluster
+        pred_tree_nodes,
+        sim_func,
+        compat_func,
+        constraints,
+        cost_per_cluster,
+        num_points,
+        num_constraints
     )
 
     # the predicted entities canonicalization
