@@ -92,25 +92,38 @@ def custom_hac(points, sim_func):
     return Z
 
 
-def intra_subcluster_energy(subcluster, sim_func, num_points):
+def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
     subcluster_leaves = subcluster.get_leaves()
     assert len(subcluster_leaves) > 0
-    reps = np.vstack([n.raw_rep for n in subcluster_leaves])
+    if opt.cluster_obj_reps == 'raw':
+        reps = np.vstack([n.raw_rep for n in subcluster_leaves])
+    else:
+        assert opt.cluster_obj_reps == 'transformed'
+        reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
     canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
     rep_affinities = sim_func(reps, canon_rep)
     return np.sum(rep_affinities) / num_points
 
 
-def constraint_satisfaction(node, compat_func, constraints, num_constraints):
+def constraint_satisfaction(opt,
+                            node,
+                            compat_func,
+                            constraints,
+                            num_constraints):
     constraints_satisfied = {}
     for i, xi in enumerate(constraints):
         compat_score = compat_func(node, xi)
         if compat_score > 0:
-            constraints_satisfied[i] = compat_score / num_constraints
+            if opt.compat_agg == 'sum':
+                constraints_satisfied[i] = compat_score
+            else:
+                assert opt.compat_agg == 'avg'
+                constraints_satisfied[i] = compat_score / num_constraints
     return constraints_satisfied
 
 
-def value_node(node,
+def value_node(opt,
+               node,
                sim_func,
                compat_func,
                constraints,
@@ -119,10 +132,10 @@ def value_node(node,
                num_points,
                num_constraints):
     # compute raw materials
-    intra_energy = intra_subcluster_energy(node, sim_func, num_points)
+    intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
     intra_energy -= cost_per_cluster
     satisfy_energies = constraint_satisfaction(
-        node, compat_func, constraints, num_constraints
+        opt, node, compat_func, constraints, num_constraints
     )
 
     # fill the value map
@@ -157,7 +170,8 @@ def value_node(node,
     return value_map
 
 
-def memoize_subcluster(node,
+def memoize_subcluster(opt,
+                       node,
                        sim_func,
                        compat_func,
                        constraints,
@@ -167,6 +181,7 @@ def memoize_subcluster(node,
                        num_constraints):
 
     node_map = value_node(
+        opt,
         node,
         sim_func,
         compat_func,
@@ -178,7 +193,8 @@ def memoize_subcluster(node,
     )
 
     if len(node.children) > 0:
-        child_maps = [memoize_subcluster(c, 
+        child_maps = [memoize_subcluster(opt,
+                                         c, 
                                          sim_func,
                                          compat_func,
                                          constraints,
@@ -263,7 +279,8 @@ def memoize_subcluster(node,
     return node_map
         
 
-def get_opt_tree_cut(pred_tree_nodes,
+def get_opt_tree_cut(opt,
+                     pred_tree_nodes,
                      sim_func,
                      compat_func,
                      constraints,
@@ -279,6 +296,7 @@ def get_opt_tree_cut(pred_tree_nodes,
     # recursively compute value map of root node
     assert pred_tree_nodes[-1].parent is None
     root_value_map = memoize_subcluster(
+        opt,
         pred_tree_nodes[-1],
         sim_func,
         compat_func,
@@ -298,7 +316,8 @@ def get_opt_tree_cut(pred_tree_nodes,
     return max_cut, max_cut_score
 
 
-def cluster_points(leaf_nodes,
+def cluster_points(opt,
+                   leaf_nodes,
                    labels,
                    sim_func,
                    compat_func,
@@ -343,6 +362,7 @@ def cluster_points(leaf_nodes,
 
     # find the best cut
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
+        opt,
         pred_tree_nodes,
         sim_func,
         compat_func,
@@ -363,13 +383,13 @@ def cluster_points(leaf_nodes,
         for x in n.get_leaves():
             pred_labels[x.uid] = i
     
-
     # compute metrics
     dp = dendrogram_purity(pred_tree_nodes, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
     adj_mut_info = adj_mi(pred_labels, labels)
 
     metrics = {
+        'pred_k' : len(cut_frontier_nodes),
         'dp' : round(dp, 4),
         'adj_rand_idx' : round(adj_rand_idx, 4),
         'adj_mut_info' : round(adj_mut_info, 4),
@@ -379,12 +399,15 @@ def cluster_points(leaf_nodes,
     return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
 
 
-def gen_constraint(gold_entities,
+def gen_constraint(opt,
+                   gold_entities,
                    pred_canon_ents,
                    pred_tree_nodes,
                    constraints,
                    sim_func,
                    num_to_generate=1):
+
+    # TODO: add capability to control strength of constraints generated
 
     for _ in range(num_to_generate):
         # randomly generate valid feedback in the form of there-exists constraints
@@ -450,6 +473,7 @@ def run_mock_icff(opt,
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(
+            opt,
             leaves,
             mention_labels,
             sim_func,
@@ -468,6 +492,7 @@ def run_mock_icff(opt,
         logger.debug('*** START - Generating Constraints ***')
         # generate constraints and viable places given predictions
         constraints = gen_constraint(
+            opt,
             gold_entities,
             pred_canon_ents,
             pred_tree_nodes,
@@ -555,6 +580,20 @@ def get_opt():
     parser.add_argument('--cost_per_cluster', type=float, default=0.5,
                         help="proportion of entity features added to mention")
 
+
+    parser.add_argument('--cluster_obj_reps', type=str,
+                        choices=['raw', 'transformed'], default='raw',
+                        help="which reps to use in tree cutting")
+    parser.add_argument('--compat_agg', type=str,
+                        choices=['avg', 'sum'], default='avg',
+                        help="how to aggregate constraint compatibility in obj")
+    parser.add_argument('--sim_func', type=str,
+                        choices=['cosine', 'jaccard'], default='cosine',
+                        help="similarity function for clustering")
+    parser.add_argument('--compat_func', type=str,
+                        choices=['raw', 'transformed'], default='raw',
+                        help="compatibility function constraint satisfaction")
+
     parser.add_argument('--max_rounds', type=int, default=100,
                         help="number of rounds to generate feedback for")
     parser.add_argument('--num_constraints_per_round', type=int, default=1,
@@ -571,6 +610,26 @@ def get_opt():
 def check_opt(opt):
     # TODO: do a bunch of checks on the options
     pass
+
+
+def set_sim_func(opt):
+    sim_func = None
+    if opt.sim_func == 'cosine':
+        sim_func = cos_sim
+    elif opt.sim_func == 'jaccard':
+        sim_func = jaccard_sim
+    assert sim_func is not None
+    return sim_func
+
+
+def set_compat_func(opt):
+    compat_func = None
+    if opt.compat_func == 'raw':
+        compat_func = raw_overlap
+    elif opt.compat_func == 'transformed':
+        compat_func = transformed_overlap
+    assert compat_func is not None
+    return compat_func
 
 
 def main():
@@ -598,9 +657,9 @@ def main():
         with open(data_fname, 'rb') as f:
             gold_entities, mentions, mention_labels = pickle.load(f)
 
-    # declare similarity function with function pointer
-    sim_func = cos_sim
-    compat_func = raw_overlap
+    # declare similarity and compatibility functions with function pointers
+    sim_func = set_sim_func(opt)
+    compat_func = set_compat_func(opt)
 
     # run the core function
     run_mock_icff(

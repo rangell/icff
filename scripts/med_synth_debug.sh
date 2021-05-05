@@ -9,9 +9,13 @@ python src/main.py\
     --num_entities=10\
     --num_mentions=100\
     --data_dim=256\
-    --max_rounds=5\
+    --entity_noise_prob=0.4\
+    --mention_sample_prob=0.35\
+    --cost_per_cluster=0.005\
+    --max_rounds=100\
     --num_constraints_per_round=1\
-    --entity_noise_prob=0.5\
-    --mention_sample_prob=0.3\
-    --cost_per_cluster=0.01\
+    --sim_func='cosine'\
+    --compat_func='raw'\
+    --cluster_obj_reps='transformed'\
+    --compat_agg='avg'\
     --debug
