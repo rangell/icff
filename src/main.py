@@ -109,10 +109,14 @@ def constraint_satisfaction(opt,
                             node,
                             compat_func,
                             constraints,
+                            num_points,
                             num_constraints):
+
     constraints_satisfied = {}
     for i, xi in enumerate(constraints):
-        compat_score = compat_func(node, xi)
+        compat_score = compat_func(
+            node, xi, num_points if opt.super_compat_score else 1
+        )
         if compat_score > 0:
             if opt.compat_agg == 'sum':
                 constraints_satisfied[i] = compat_score
@@ -131,11 +135,12 @@ def value_node(opt,
                cost_per_cluster,
                num_points,
                num_constraints):
+
     # compute raw materials
     intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
     intra_energy -= cost_per_cluster
     satisfy_energies = constraint_satisfaction(
-        opt, node, compat_func, constraints, num_constraints
+        opt, node, compat_func, constraints, num_points, num_constraints
     )
 
     # fill the value map
@@ -407,8 +412,6 @@ def gen_constraint(opt,
                    sim_func,
                    num_to_generate=1):
 
-    # TODO: add capability to control strength of constraints generated
-
     for _ in range(num_to_generate):
         # randomly generate valid feedback in the form of there-exists constraints
         pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
@@ -428,10 +431,12 @@ def gen_constraint(opt,
                 ff_constraint = np.zeros_like(tgt_gold_ent)
                 in_pred_domain = np.where(ff_pred_ent & tgt_gold_ent == 1)[0]
                 out_pred_domain = np.where(neg_match_feats != 0)[0]
-                in_idx = np.random.randint(in_pred_domain.size)
-                out_idx = np.random.randint(out_pred_domain.size)
-                ff_constraint[in_pred_domain[in_idx]] = 1
-                ff_constraint[out_pred_domain[out_idx]] = -1
+                np.random.shuffle(in_pred_domain)
+                np.random.shuffle(out_pred_domain)
+                in_idxs = in_pred_domain[:opt.constraint_strength]
+                out_idxs = out_pred_domain[:opt.constraint_strength]
+                ff_constraint[in_idxs] = 1
+                ff_constraint[out_idxs] = -1
 
                 if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
                     break
@@ -439,16 +444,18 @@ def gen_constraint(opt,
             logger.debug('****** MERGE CONSTRAINT ******')
             assert num_ent_subsets == 1
             # merge required
-            super_gold_ent = 2*gold_entities[np.argmax(is_ent_subsets)]-1
+            super_gold_ent = gold_entities[np.argmax(is_ent_subsets)]
 
             while True:
                 ff_constraint = np.zeros_like(super_gold_ent)
                 in_pred_domain = np.where(ff_pred_ent == 1)[0]
                 out_pred_domain = np.where((super_gold_ent ^ ff_pred_ent) != 0)[0]
-                in_idx = np.random.randint(in_pred_domain.size)
-                out_idx = np.random.randint(out_pred_domain.size)
-                ff_constraint[in_pred_domain[in_idx]] = 1
-                ff_constraint[out_pred_domain[out_idx]] = super_gold_ent[out_pred_domain[out_idx]]
+                np.random.shuffle(in_pred_domain)
+                np.random.shuffle(out_pred_domain)
+                in_idxs = in_pred_domain[:opt.constraint_strength]
+                out_idxs = out_pred_domain[:opt.constraint_strength]
+                ff_constraint[in_idxs] = 1
+                ff_constraint[out_idxs] = 1
 
                 if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
                     break
@@ -464,6 +471,8 @@ def run_mock_icff(opt,
                   mention_labels,
                   sim_func,
                   compat_func):
+
+    num_points = mentions.shape[0]
     constraints = []
 
     # construct tree node objects for leaves
@@ -510,7 +519,7 @@ def run_mock_icff(opt,
         viable_placements = []
         for xi in constraints:
             compatible_nodes = constraint_compatible_nodes(
-                pred_tree_nodes, xi, compat_func
+                opt, pred_tree_nodes, xi, compat_func, num_points
             )
             viable_placements.append(
                 sorted(
@@ -593,6 +602,10 @@ def get_opt():
     parser.add_argument('--compat_func', type=str,
                         choices=['raw', 'transformed'], default='raw',
                         help="compatibility function constraint satisfaction")
+    parser.add_argument('--constraint_strength', type=int, default=1,
+                        help="1/2 the max number features in gen constraint")
+    parser.add_argument('--super_compat_score', action='store_true',
+                        help="Enables super compatibility score when perfect")
 
     parser.add_argument('--max_rounds', type=int, default=100,
                         help="number of rounds to generate feedback for")

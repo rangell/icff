@@ -3,10 +3,16 @@ import numpy as np
 from IPython import embed
 
 
-def constraint_compatible_nodes(nodes, ff_constraint, compat_func):
+def constraint_compatible_nodes(opt,
+                                nodes,
+                                ff_constraint,
+                                compat_func,
+                                num_points):
     compatible_nodes = []
     for node in nodes:
-        compat_score = compat_func(node, ff_constraint)
+        compat_score = compat_func(
+            node, ff_constraint, num_points if opt.super_compat_score else 1
+        )
         if compat_score > 0:
             compatible_nodes.append((compat_score, node))
     return compatible_nodes

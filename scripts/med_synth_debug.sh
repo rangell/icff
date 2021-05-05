@@ -17,5 +17,7 @@ python src/main.py\
     --sim_func='cosine'\
     --compat_func='raw'\
     --cluster_obj_reps='transformed'\
-    --compat_agg='avg'\
+    --compat_agg='sum'\
+    --constraint_strength=1\
+    --super_compat_score\
     --debug
