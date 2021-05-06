@@ -18,6 +18,6 @@ python src/main.py\
     --compat_func='raw'\
     --cluster_obj_reps='raw'\
     --compat_agg='avg'\
-    --constraint_strength=10\
+    --constraint_strength=3\
     --super_compat_score\
     --debug

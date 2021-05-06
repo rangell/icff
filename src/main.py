@@ -389,12 +389,14 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
+    fits = np.sum(np.vstack(constraints) != 0) if len(constraints) > 0 else 0
     dp = dendrogram_purity(pred_tree_nodes, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
     adj_mut_info = adj_mi(pred_labels, labels)
 
     metrics = {
         'pred_k' : len(cut_frontier_nodes),
+        'fits' : fits,
         'dp' : round(dp, 4),
         'adj_rand_idx' : round(adj_rand_idx, 4),
         'adj_mut_info' : round(adj_mut_info, 4),
@@ -506,21 +508,24 @@ def run_mock_icff(opt,
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        logger.debug('*** START - Generating Constraints ***')
-        # generate constraints and viable places given predictions
-        constraints = gen_constraint(
-            opt,
-            gold_entities,
-            pred_canon_ents,
-            pred_tree_nodes,
-            constraints,
-            sim_func,
-            num_to_generate=opt.num_constraints_per_round
-        )
-        logger.debug('*** END - Generating Constraints ***')
+        # generate constraints every `iters` round
+        iters = 1
+        if r % iters == 0: 
+            logger.debug('*** START - Generating Constraints ***')
+            # generate constraints and viable places given predictions
+            constraints = gen_constraint(
+                opt,
+                gold_entities,
+                pred_canon_ents,
+                pred_tree_nodes,
+                constraints,
+                sim_func,
+                num_to_generate=opt.num_constraints_per_round
+            )
+            logger.debug('*** END - Generating Constraints ***')
 
-        ## NOTE: JUST FOR TESTING
-        #constraints = [(2*ent - 1) for ent in gold_entities]
+            ## NOTE: JUST FOR TESTING
+            #constraints = [(2*ent - 1) for ent in gold_entities]
 
         logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
