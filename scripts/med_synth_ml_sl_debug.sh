@@ -3,7 +3,7 @@
 eval "$(conda shell.bash hook)"
 conda activate icff
 
-python src/icff.py\
+python src/ml_sl.py\
     --seed=27\
     --data_dir="data/"\
     --num_entities=10\
@@ -15,9 +15,5 @@ python src/icff.py\
     --max_rounds=100\
     --num_constraints_per_round=1\
     --sim_func='cosine'\
-    --compat_func='raw'\
     --cluster_obj_reps='raw'\
-    --compat_agg='avg'\
-    --constraint_strength=3\
-    --super_compat_score\
     --debug

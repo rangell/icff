@@ -3,7 +3,7 @@
 eval "$(conda shell.bash hook)"
 conda activate icff
 
-python src/main.py\
+python src/icff.py\
     --seed=27\
     --data_dir="data/"\
     --num_entities=5\
