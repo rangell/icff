@@ -413,52 +413,60 @@ def gen_constraint(opt,
                    num_to_generate=1):
 
     for _ in range(num_to_generate):
-        # randomly generate valid feedback in the form of there-exists constraints
+        # oracle feedback generation in the form of there-exists constraints
         pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
         ff_pred_ent = pred_canon_ents[pred_ent_idx]
-        feat_intersect = (ff_pred_ent & gold_entities) == ff_pred_ent
-        is_ent_subsets = np.all(feat_intersect, axis=1)
+        feat_intersect = ff_pred_ent & gold_entities
+        feat_subset = feat_intersect == ff_pred_ent
+        is_ent_subsets = np.all(feat_subset, axis=1)
         num_ent_subsets = np.sum(is_ent_subsets)
         assert num_ent_subsets < 2
         if num_ent_subsets == 0:
             logger.debug('****** SPLIT CONSTRAINT ******')
             # split required
             tgt_ent_idx = np.argmax(np.sum(feat_intersect, axis=1))
-            tgt_gold_ent = gold_entities[tgt_ent_idx]
-            neg_match_feats = (feat_intersect[tgt_ent_idx] == False).astype(int)
-
-            while True:
-                ff_constraint = np.zeros_like(tgt_gold_ent)
-                in_pred_domain = np.where(ff_pred_ent & tgt_gold_ent == 1)[0]
-                out_pred_domain = np.where(neg_match_feats != 0)[0]
-                np.random.shuffle(in_pred_domain)
-                np.random.shuffle(out_pred_domain)
-                in_idxs = in_pred_domain[:opt.constraint_strength]
-                out_idxs = out_pred_domain[:opt.constraint_strength]
-                ff_constraint[in_idxs] = 1
-                ff_constraint[out_idxs] = -1
-
-                if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
-                    break
         else:
             logger.debug('****** MERGE CONSTRAINT ******')
             assert num_ent_subsets == 1
             # merge required
-            super_gold_ent = gold_entities[np.argmax(is_ent_subsets)]
+            tgt_ent_idx = np.argmax(is_ent_subsets)
 
-            while True:
-                ff_constraint = np.zeros_like(super_gold_ent)
-                in_pred_domain = np.where(ff_pred_ent == 1)[0]
-                out_pred_domain = np.where((super_gold_ent ^ ff_pred_ent) != 0)[0]
-                np.random.shuffle(in_pred_domain)
-                np.random.shuffle(out_pred_domain)
-                in_idxs = in_pred_domain[:opt.constraint_strength]
-                out_idxs = out_pred_domain[:opt.constraint_strength]
-                ff_constraint[in_idxs] = 1
-                ff_constraint[out_idxs] = 1
+        tgt_gold_ent = gold_entities[tgt_ent_idx]
 
-                if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
-                    break
+        while True:
+            # init constraint
+            ff_constraint = np.zeros_like(tgt_gold_ent)
+
+            # sample "in"-features
+            in_pred_domain = np.where(ff_pred_ent == 1)[0]
+            np.random.shuffle(in_pred_domain)
+            in_idxs = in_pred_domain[:opt.constraint_strength]
+
+            # select 2nd closest gold entity
+            arg_feat_overlap = np.argsort(np.sum(feat_intersect, axis=1))
+            assert arg_feat_overlap[-1] == tgt_ent_idx
+            neg_tgt_idx = arg_feat_overlap[-2]
+            neg_tgt_ent = gold_entities[neg_tgt_idx]
+
+            # sample "out"-features
+            out_pos_feats = (tgt_gold_ent ^ ff_pred_ent) & (1-neg_tgt_ent)
+            out_pred_domain = np.where(out_pos_feats)[0]
+            np.random.shuffle(out_pred_domain)
+            out_idxs = out_pred_domain[:opt.constraint_strength]
+
+            # sample "neg"-features
+            out_neg_feats = neg_tgt_ent & (1 - tgt_gold_ent)
+            out_neg_domain = np.where(out_neg_feats)[0]
+            np.random.shuffle(out_neg_domain)
+            neg_idxs = out_neg_domain[:opt.constraint_strength]
+
+            # fill in constraint
+            ff_constraint[in_idxs] = 1
+            ff_constraint[out_idxs] = 1
+            ff_constraint[neg_idxs] = -1
+
+            if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
+                break
 
         constraints.append(ff_constraint)
 

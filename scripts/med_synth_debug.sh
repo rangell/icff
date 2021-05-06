@@ -16,8 +16,8 @@ python src/main.py\
     --num_constraints_per_round=1\
     --sim_func='cosine'\
     --compat_func='raw'\
-    --cluster_obj_reps='transformed'\
-    --compat_agg='sum'\
-    --constraint_strength=1\
+    --cluster_obj_reps='raw'\
+    --compat_agg='avg'\
+    --constraint_strength=10\
     --super_compat_score\
     --debug
