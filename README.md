@@ -6,18 +6,18 @@ form of "there-exists" constraints.
 # Usage
 
 ```bash
-python src/main.py [OPTIONS]
+python src/icff.py [OPTIONS]
 ```
 
 # Done
 - Add more parameters to data generation
 - Fix cut objective to match the paper
 - Fix feedback generation (add strength parameter)
+- Different way of generating synthetic data?
+- Sort order of equivalent assignments (assign step)?
 
 
 # TODO
-- Different way of generating synthetic data?
-- Sort order of equivalent assignments (assign step)?
 - Must and shouldn't link constraints
 - Support for real datasets
  - BoW document clustering
