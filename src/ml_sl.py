@@ -1,4 +1,5 @@
 import os
+import gc
 import copy
 import pickle
 import random
@@ -31,11 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 def custom_hac(points, sim_func, constraints):
-
-    # TODO: enforce must-link constraints in init of level_set
-    # TODO: make sure to store linkages in Z
     level_set = points.astype(float)
     Z = []
+
+    set_union = list(range(points.shape[0]))
+    must_link_gen = iter([(a, b) for p, a, b in constraints if p == np.inf])
+    forced_mergers_left = True
 
     uids = np.arange(level_set.shape[0])
     num_leaves = np.ones_like(uids)
@@ -45,43 +47,65 @@ def custom_hac(points, sim_func, constraints):
         dist_mx = np.triu(1 - sim_func(level_set, level_set) + 1e-8, k=1)
 
         # get next agglomeration
-        agglom_coord = np.where(dist_mx == dist_mx[dist_mx != 0].min())
-        agglom_coord = tuple(map(lambda x : x[0:1], agglom_coord))
-        agglom_ind = np.array(list(map(lambda x : x[0], agglom_coord)))
+        if forced_mergers_left:
+            try:
+                luid, ruid = next(must_link_gen)
+                # set union check
+                while luid != set_union[luid]:
+                    luid = set_union[luid]
+                while ruid != set_union[ruid]:
+                    ruid = set_union[ruid]
+                luid = np.where(uids == luid)[0].item()
+                ruid = np.where(uids == ruid)[0].item()
+                agglom_ind = np.array([luid, ruid])
+            except StopIteration:
+                forced_mergers_left = False
+                del set_union
+                gc.collect()
+
+        if not forced_mergers_left:
+            agglom_coord = np.where(dist_mx == dist_mx[dist_mx != 0].min())
+            agglom_coord = tuple(map(lambda x : x[0:1], agglom_coord))
+            agglom_ind = np.array(list(map(lambda x : x[0], agglom_coord)))
         agglom_mask = np.zeros_like(uids, dtype=bool)
         agglom_mask[agglom_ind] = True
-        if np.any(violate_mask[agglom_coord]):
-            agglom_rep = np.ones_like(level_set[0]) * -np.inf
-        else:
-            agglom_rep = reduce(
-                lambda a, b : a | b,
-                level_set[agglom_mask].astype(int)
-            )
+        agglom_rep = reduce(
+            lambda a, b : a | b,
+            level_set[agglom_mask].astype(int)
+        )
 
         # update data structures
+        linkage_score = np.inf if forced_mergers_left else dist_mx[agglom_coord]
         not_agglom_mask = ~agglom_mask
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
         Z.append(
             np.array(
                 [float(uids[agglom_ind[0]]),
                  float(uids[agglom_ind[1]]),
-                 float(dist_mx[agglom_coord]),
+                 float(linkage_score),
                  float(agglom_num_leaves)]
             )
         )
         level_set = np.concatenate(
             (level_set[not_agglom_mask], agglom_rep[None,:])
         )
+        next_uid = np.max(uids) + 1
         uids = np.concatenate(
-            (uids[not_agglom_mask], np.array([np.max(uids) + 1]))
+            (uids[not_agglom_mask], np.array([next_uid]))
         )
+        if forced_mergers_left:
+            # only need the set union for forced mergers
+            assert next_uid == len(set_union)
+            set_union.append(next_uid)
+            for agglom_idx in agglom_ind:
+                set_union[agglom_idx] = next_uid
         num_leaves = np.concatenate(
             (num_leaves[not_agglom_mask], np.array([agglom_num_leaves]))
         )
 
     # return the linkage matrix
     Z = np.vstack(Z)
-    
+
     return Z
 
 
@@ -122,7 +146,6 @@ def constraint_satisfaction(opt,
 def value_node(opt,
                node,
                sim_func,
-               compat_func,
                constraints,
                incompat_mx,
                cost_per_cluster,
@@ -171,7 +194,6 @@ def value_node(opt,
 def memoize_subcluster(opt,
                        node,
                        sim_func,
-                       compat_func,
                        constraints,
                        incompat_mx,
                        cost_per_cluster,
@@ -182,7 +204,6 @@ def memoize_subcluster(opt,
         opt,
         node,
         sim_func,
-        compat_func,
         constraints,
         incompat_mx,
         cost_per_cluster,
@@ -194,7 +215,6 @@ def memoize_subcluster(opt,
         child_maps = [memoize_subcluster(opt,
                                          c, 
                                          sim_func,
-                                         compat_func,
                                          constraints,
                                          incompat_mx,
                                          cost_per_cluster,
@@ -280,7 +300,6 @@ def memoize_subcluster(opt,
 def get_opt_tree_cut(opt,
                      pred_tree_nodes,
                      sim_func,
-                     compat_func,
                      constraints,
                      cost_per_cluster,
                      num_points,
@@ -297,7 +316,6 @@ def get_opt_tree_cut(opt,
         opt,
         pred_tree_nodes[-1],
         sim_func,
-        compat_func,
         constraints,
         incompat_mx,
         cost_per_cluster,
@@ -362,7 +380,6 @@ def cluster_points(opt,
         opt,
         pred_tree_nodes,
         sim_func,
-        compat_func,
         constraints,
         cost_per_cluster,
         num_points,
@@ -480,6 +497,20 @@ def run_mock_ml_sl(opt,
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
     for r in range(opt.max_rounds):
+
+        # TESTING: generate some fake constraints
+        pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
+        pos_edges = list(zip(*pos_idxs))
+        random.shuffle(pos_edges)
+
+        neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
+        neg_edges = list(zip(*neg_idxs))
+        random.shuffle(neg_edges)
+
+        constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
+        constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
+        random.shuffle(constraints)
+
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(
@@ -595,9 +626,9 @@ def get_opt():
     parser.add_argument('--sim_func', type=str,
                         choices=['cosine', 'jaccard'], default='cosine',
                         help="similarity function for clustering")
-    parser.add_argument('--compat_func', type=str,
+    parser.add_argument('--cluster_obj_reps', type=str,
                         choices=['raw', 'transformed'], default='raw',
-                        help="compatibility function constraint satisfaction")
+                        help="which reps to use in tree cutting")
     parser.add_argument('--constraint_strength', type=int, default=1,
                         help="1/2 the max number features in gen constraint")
     parser.add_argument('--super_compat_score', action='store_true',
