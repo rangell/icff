@@ -40,12 +40,13 @@ def custom_hac(points, sim_func, constraints):
     must_link_gen = iter([(a, b) for p, a, b in constraints if p == np.inf])
     forced_mergers_left = True
 
+    cannot_link_pairs = [(a, b) for p, a, b in constraints if p == -np.inf]
+    cannot_link_idxs = tuple(np.array(l) for l in zip(*cannot_link_pairs))
+
     uids = np.arange(level_set.shape[0])
     num_leaves = np.ones_like(uids)
 
     while level_set.shape[0] > 1:
-        # compute dist matrix
-        dist_mx = np.triu(1 - sim_func(level_set, level_set) + 1e-8, k=1)
 
         # get next agglomeration
         if forced_mergers_left:
@@ -61,24 +62,34 @@ def custom_hac(points, sim_func, constraints):
                 agglom_ind = np.array([luid, ruid])
             except StopIteration:
                 forced_mergers_left = False
-                del set_union
-                gc.collect()
 
         if not forced_mergers_left:
+            dist_mx = np.triu(1 - sim_func(level_set, level_set) + 1e-8, k=1)
+            violate_mask = np.zeros_like(dist_mx).astype(bool)
+            if len(cannot_link_idxs) > 0:
+                violate_mask[cannot_link_idxs] = True
+            dist_mx[violate_mask] = np.inf
+
             agglom_coord = np.where(dist_mx == dist_mx[dist_mx != 0].min())
             agglom_coord = tuple(map(lambda x : x[0:1], agglom_coord))
             agglom_ind = np.array(list(map(lambda x : x[0], agglom_coord)))
+
         agglom_mask = np.zeros_like(uids, dtype=bool)
         agglom_mask[agglom_ind] = True
-        agglom_rep = reduce(
-            lambda a, b : a | b,
-            level_set[agglom_mask].astype(int)
-        )
+        if forced_mergers_left or not violate_mask[agglom_coord].item():
+            agglom_rep = reduce(
+                lambda a, b : a | b,
+                level_set[agglom_mask].astype(int)
+            )
+        else:
+            agglom_rep = np.ones_like(level_set[0]) * -np.inf
 
         # update data structures
         linkage_score = np.inf if forced_mergers_left else dist_mx[agglom_coord]
         not_agglom_mask = ~agglom_mask
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
+
+        # update linkage matrix
         Z.append(
             np.array(
                 [float(uids[agglom_ind[0]]),
@@ -87,21 +98,36 @@ def custom_hac(points, sim_func, constraints):
                  float(agglom_num_leaves)]
             )
         )
+
+        # update level set
         level_set = np.concatenate(
             (level_set[not_agglom_mask], agglom_rep[None,:])
         )
+
+        # update set union
         next_uid = np.max(uids) + 1
+        assert next_uid == len(set_union)
+        set_union.append(next_uid)
+        for agglom_idx in agglom_ind:
+            set_union[uids[agglom_idx]] = next_uid
+
+        # update uids list
         uids = np.concatenate(
             (uids[not_agglom_mask], np.array([next_uid]))
         )
-        if forced_mergers_left:
-            # only need the set union for forced mergers
-            assert next_uid == len(set_union)
-            set_union.append(next_uid)
-            for agglom_idx in agglom_ind:
-                set_union[agglom_idx] = next_uid
+        # update new_leaves list
         num_leaves = np.concatenate(
             (num_leaves[not_agglom_mask], np.array([agglom_num_leaves]))
+        )
+
+        # update cannot_link_idxs
+        def remap_cannot_idxs(idx):
+            if idx in agglom_ind:
+                return uids.size - 1
+            return idx - np.sum(idx > agglom_ind)
+        v_remap_cannot_idxs = np.vectorize(remap_cannot_idxs)
+        cannot_link_idxs = tuple(
+            v_remap_cannot_idxs(l) for l in cannot_link_idxs
         )
 
     # return the linkage matrix
@@ -331,20 +357,6 @@ def run_mock_ml_sl(opt,
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
     for r in range(opt.max_rounds):
-
-        # TESTING: generate some fake constraints
-        pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
-        pos_edges = list(zip(*pos_idxs))
-        random.shuffle(pos_edges)
-
-        neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
-        neg_edges = list(zip(*neg_idxs))
-        random.shuffle(neg_edges)
-
-        constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
-        constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
-        random.shuffle(constraints)
-
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(

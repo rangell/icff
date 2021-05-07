@@ -44,7 +44,7 @@ def custom_hac(points, sim_func):
         # each other -- i.e. one has a feature and the other has *not* that
         # feature
         violate_mask = np.sum(
-            np.abs(level_set[:,None,:] - level_set[None, :, :]) > 2,
+            np.abs(level_set[:,None,:] - level_set[None, :, :]) == 2,
             axis=-1
         ).astype(bool)
 

@@ -12,7 +12,7 @@ python src/ml_sl.py\
     --entity_noise_prob=0.4\
     --mention_sample_prob=0.35\
     --cost_per_cluster=0.005\
-    --max_rounds=100\
+    --max_rounds=10\
     --num_constraints_per_round=1\
     --sim_func='cosine'\
     --cluster_obj_reps='raw'\
