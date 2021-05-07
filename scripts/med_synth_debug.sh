@@ -18,6 +18,6 @@ python src/icff.py\
     --compat_func='raw'\
     --cluster_obj_reps='raw'\
     --compat_agg='avg'\
-    --constraint_strength=3\
+    --constraint_strength=5\
     --super_compat_score\
     --debug

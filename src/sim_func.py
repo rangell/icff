@@ -10,12 +10,25 @@ def dot_prod(a, b):
 
 def jaccard_sim(a, b):
     """ Compute the pairwise jaccard similarity of sets of sets a and b. """
+    inf_mask = (np.any(a == -np.inf, axis=1)[:,None]
+                | np.any(b == -np.inf, axis=1)[None, :])
+    a[a == -np.inf] = 0
+    b[b == -np.inf] = 0
     _a = a[:,None,:]
     _b = b[None, :, :]
     intersect_size = np.sum((_a != 0) & (_b != 0) & (_a == _b), axis=-1)
     union_size = np.sum(np.abs(_a) + np.abs(_b), axis=-1) - intersect_size
-    return intersect_size / union_size
+
+    scores = intersect_size / union_size
+    scores[inf_mask] = -np.inf
+    return scores
 
 
 def cos_sim(a, b):
-    return cosine_similarity(a, b)
+    inf_mask = (np.any(a == -np.inf, axis=1)[:,None]
+                | np.any(b == -np.inf, axis=1)[None, :])
+    a[a == -np.inf] = 0
+    b[b == -np.inf] = 0
+    scores = cosine_similarity(a, b)
+    scores[inf_mask] = -np.inf
+    return scores
