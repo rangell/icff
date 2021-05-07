@@ -295,15 +295,25 @@ def cluster_points(opt,
 
 
 def gen_constraint(opt,
-                   gold_entities,
-                   pred_canon_ents,
-                   pred_tree_nodes,
+                   mention_labels,
+                   pred_labels,
                    constraints,
-                   sim_func,
                    num_to_generate=1):
 
-    for _ in range(num_to_generate):
-        # TODO:
+    gold_pw_cc = ((mention_labels[:, None] == mention_labels[None, :])
+                    ^ np.eye(mention_labels.size).astype(bool))
+    pred_pw_cc = ((pred_labels[:, None] == pred_labels[None, :])
+                    ^ np.eye(pred_labels.size).astype(bool))
+    assert gold_pw_cc.shape == pred_pw_cc.shape
+    candidate_constraints = np.where(np.triu(gold_pw_cc ^ pred_pw_cc, k=1))
+    candidate_constraints = list(zip(*candidate_constraints))
+    random.shuffle(candidate_constraints)
+    
+    for a, b in candidate_constraints[:num_to_generate]:
+        if gold_pw_cc[a, b]:
+            constraints.append((np.inf, a, b))
+        else:
+            constraints.append((-np.inf, a, b))
 
     return constraints
 
@@ -360,11 +370,9 @@ def run_mock_ml_sl(opt,
             # generate constraints and viable places given predictions
             constraints = gen_constraint(
                 opt,
-                gold_entities,
-                pred_canon_ents,
-                pred_tree_nodes,
+                mention_labels,
+                pred_labels,
                 constraints,
-                sim_func,
                 num_to_generate=opt.num_constraints_per_round
             )
             logger.debug('*** END - Generating Constraints ***')
