@@ -13,7 +13,6 @@ python src/icff.py [OPTIONS]
 - Add more parameters to data generation
 - Fix cut objective to match the paper
 - Fix feedback generation (add strength parameter)
-- Different way of generating synthetic data?
 - Sort order of equivalent assignments (assign step)?
 
 
@@ -22,5 +21,6 @@ python src/icff.py [OPTIONS]
 - Support for real datasets
  - BoW document clustering
  - Entity Resolution
+- Different way of generating synthetic data?
 - Gurobi & or-tools integration?
 - Plotting/tracking experiments

@@ -28,6 +28,7 @@ from utils import initialize_exp
 from IPython import embed
 
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,179 +123,70 @@ def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
     return np.sum(rep_affinities) / num_points
 
 
-def constraint_satisfaction(opt,
-                            node,
-                            compat_func,
-                            constraints,
-                            num_points,
-                            num_constraints):
-
-    constraints_satisfied = {}
-    for i, xi in enumerate(constraints):
-        compat_score = compat_func(
-            node, xi, num_points if opt.super_compat_score else 1
-        )
-        if compat_score > 0:
-            if opt.compat_agg == 'sum':
-                constraints_satisfied[i] = compat_score
-            else:
-                assert opt.compat_agg == 'avg'
-                constraints_satisfied[i] = compat_score / num_constraints
-    return constraints_satisfied
+def constraint_satisfaction(opt, leaf_uids, constraints):
+    for p, a, b in constraints:
+        pair = set([a, b])
+        if pair.isdisjoint(leaf_uids):
+            continue
+        if p == np.inf and not pair.issubset(leaf_uids): # must-link
+            return False
+        elif p == -np.inf and pair.issubset(leaf_uids): # shouldn't-link
+            return False
+    return True
 
 
 def value_node(opt,
                node,
                sim_func,
                constraints,
-               incompat_mx,
                cost_per_cluster,
-               num_points,
-               num_constraints):
+               num_points):
 
     # compute raw materials
-    intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
-    intra_energy -= cost_per_cluster
-    satisfy_energies = constraint_satisfaction(
-        opt, node, compat_func, constraints, num_points, num_constraints
-    )
+    leaf_uids = set([x.uid for x in node.get_leaves()])
+    satisfied = constraint_satisfaction(opt, leaf_uids, constraints)
+    if not satisfied:
+        intra_energy = -np.inf
+    else:
+        intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
+        intra_energy -= cost_per_cluster
 
-    # fill the value map
-    value_map = {tuple() : (intra_energy, [node], {})}
-    if len(satisfy_energies) > 0:
-        # resolve max subsets of compatible constraints
-        cnstrt_idxs = list(satisfy_energies.keys())
-        sub_incompat_mx = incompat_mx[np.ix_(cnstrt_idxs, cnstrt_idxs)]
-        if np.any(sub_incompat_mx): # hard case: not every valid constraint is compatible
-            # get masks of all valid maximal subsets from cnstrt_idxs
-            max_ss_idxs = ~np.unique(
-                sub_incompat_mx[np.any(sub_incompat_mx, axis=0)], axis=0
-            )
-            for ss in max_ss_idxs:
-                ss_cnstrt_idxs = np.asarray(cnstrt_idxs)[np.where(ss)[0]]
-                ss_cnstrt_energy = sum(
-                    [satisfy_energies[k] for k in ss_cnstrt_idxs]
-                )
-                value_map[tuple(ss_cnstrt_idxs)] = (
-                    intra_energy + ss_cnstrt_energy,
-                    [node],
-                    {k : satisfy_energies[k] for k in ss_cnstrt_idxs}
-                )
-        else: # easy case: every valid constraint is compatible
-            agg_energy = sum(satisfy_energies.values())
-            value_map[tuple(sorted(satisfy_energies.keys()))] = (
-                intra_energy + agg_energy,
-                [node],
-                satisfy_energies
-            )
-
-    return value_map
+    return (intra_energy, [node])
 
 
 def memoize_subcluster(opt,
                        node,
                        sim_func,
                        constraints,
-                       incompat_mx,
                        cost_per_cluster,
-                       num_points,
-                       num_constraints):
+                       num_points):
 
-    node_map = value_node(
+    node_cut = value_node(
         opt,
         node,
         sim_func,
         constraints,
-        incompat_mx,
         cost_per_cluster,
         num_points,
-        num_constraints
     )
 
+    best_cut = node_cut
     if len(node.children) > 0:
-        child_maps = [memoize_subcluster(opt,
-                                         c, 
-                                         sim_func,
-                                         constraints,
-                                         incompat_mx,
-                                         cost_per_cluster,
-                                         num_points,
-                                         num_constraints)
-                        for c in node.children]
-        assert len(child_maps) == 2 # restrict to binary trees for now
+        best_child_cuts = [memoize_subcluster(opt,
+                                              c, 
+                                              sim_func,
+                                              constraints,
+                                              cost_per_cluster,
+                                              num_points)
+                                for c in node.children]
+        assert len(best_child_cuts) == 2 # restrict to binary trees for now
 
-        # resolve child maps
-        resolved_child_map = {}
-        for l_key, r_key in product(*[list(m.keys()) for m in child_maps]):
-            constraint_key = tuple(sorted(list(set(list(l_key)+list(r_key)))))
-            if len(constraint_key) == len(l_key) + len(r_key):
-                # non-overlap case
-                max_val, _, _ = resolved_child_map.get(
-                    constraint_key, (-np.inf, None, None)
-                )
-                l_val, l_cut, l_cnstrt = child_maps[0][l_key]
-                r_val, r_cut, r_cnstrt = child_maps[1][r_key]
-                this_val = l_val + r_val
-                if this_val >= max_val:
-                    resolved_child_map[constraint_key] = (
-                        this_val,
-                        l_cut + r_cut,
-                        l_cnstrt | r_cnstrt
-                    )
-            else:
-                # overlap case
-                l_val, l_cut, l_cnstrt = child_maps[0][l_key]
-                r_val, r_cut, r_cnstrt = child_maps[1][r_key]
-                bare_val = (l_val - sum(l_cnstrt.values())
-                            + r_val - sum(r_cnstrt.values()))
-                # resolve overlap
-                merged_cnstrt = {
-                    k : max(i for i in (l_cnstrt.get(k), r_cnstrt.get(k)) if i)
-                        for k in l_cnstrt.keys() | r_cnstrt.keys()
-                }
+        agg_child_cut_score = sum([cut[0] for cut in best_child_cuts])
+        if agg_child_cut_score > node_cut[0]:
+            best_cut = (agg_child_cut_score,
+                        [s for cut in best_child_cuts for s in cut[1]])
 
-                max_val, _, _ = resolved_child_map.get(
-                    constraint_key, (-np.inf, None, None)
-                )
-                this_val = bare_val + sum(merged_cnstrt.values())
-                if this_val >= max_val:
-                    resolved_child_map[constraint_key] = (
-                        this_val,
-                        l_cut + r_cut,
-                        merged_cnstrt
-                    )
-
-        # return map of max over merged keys of dicts
-        for key, cut_rep in resolved_child_map.items():
-            if key in node_map.keys():
-                if cut_rep[0] > node_map[key][0]:
-                    node_map[key] = resolved_child_map[key]
-            else:
-                node_map[key] = resolved_child_map[key]
-
-    # check supersets
-    node_map_keys = sorted(node_map.keys(), key=lambda k : len(k))
-    for supset_key in node_map_keys:
-        for subset_key in node_map_keys:
-            if len(subset_key) >= len(supset_key):
-                break
-            if subset_key not in node_map.keys(): # we're deleting some of the keys
-                continue
-
-            # check to see whether or not we should delete subset_key
-            supset_val, supset_cut, supset_cnstrt = node_map[supset_key]
-            subset_val, subset_cut, subset_cnstrt = node_map[subset_key]
-            supset_cmp_val = supset_val - sum(
-                [v for k, v in supset_cnstrt.items() 
-                    if k not in subset_cnstrt.keys()]
-            )
-            if supset_cmp_val < subset_val:
-                continue
-            else:
-                # don't need subset key anymore
-                del node_map[subset_key]
-
-    return node_map
+    return best_cut
         
 
 def get_opt_tree_cut(opt,
@@ -305,29 +197,16 @@ def get_opt_tree_cut(opt,
                      num_points,
                      num_constraints):
 
-    incompat_mx = None
-    if len(constraints) > 0:
-        Xi = np.vstack(constraints)
-        incompat_mx = np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1)
-
     # recursively compute value map of root node
     assert pred_tree_nodes[-1].parent is None
-    root_value_map = memoize_subcluster(
+    max_cut_score, max_cut = memoize_subcluster(
         opt,
         pred_tree_nodes[-1],
         sim_func,
         constraints,
-        incompat_mx,
         cost_per_cluster,
-        num_points,
-        num_constraints
+        num_points
     )
-
-    # pick max cut out of `root_value_map` (maximizing energy)
-    max_cut_keys = [k for k in root_value_map.keys() 
-                        if len(k) == len(constraints)]
-    assert len(max_cut_keys) == 1
-    max_cut_score, max_cut, _ = root_value_map[max_cut_keys[0]]
 
     return max_cut, max_cut_score
 
@@ -398,7 +277,7 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
-    fits = np.sum(np.vstack(constraints) != 0) if len(constraints) > 0 else 0
+    fits = 2*len(constraints)
     dp = dendrogram_purity(pred_tree_nodes, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
     adj_mut_info = adj_mi(pred_labels, labels)
@@ -424,62 +303,7 @@ def gen_constraint(opt,
                    num_to_generate=1):
 
     for _ in range(num_to_generate):
-        # oracle feedback generation in the form of there-exists constraints
-        pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
-        ff_pred_ent = pred_canon_ents[pred_ent_idx]
-        feat_intersect = ff_pred_ent & gold_entities
-        feat_subset = feat_intersect == ff_pred_ent
-        is_ent_subsets = np.all(feat_subset, axis=1)
-        num_ent_subsets = np.sum(is_ent_subsets)
-        assert num_ent_subsets < 2
-        if num_ent_subsets == 0:
-            logger.debug('****** SPLIT CONSTRAINT ******')
-            # split required
-            tgt_ent_idx = np.argmax(np.sum(feat_intersect, axis=1))
-        else:
-            logger.debug('****** MERGE CONSTRAINT ******')
-            assert num_ent_subsets == 1
-            # merge required
-            tgt_ent_idx = np.argmax(is_ent_subsets)
-
-        tgt_gold_ent = gold_entities[tgt_ent_idx]
-
-        while True:
-            # init constraint
-            ff_constraint = np.zeros_like(tgt_gold_ent)
-
-            # sample "in"-features
-            in_pred_domain = np.where(ff_pred_ent == 1)[0]
-            np.random.shuffle(in_pred_domain)
-            in_idxs = in_pred_domain[:opt.constraint_strength]
-
-            # select 2nd closest gold entity
-            arg_feat_overlap = np.argsort(np.sum(feat_intersect, axis=1))
-            assert arg_feat_overlap[-1] == tgt_ent_idx
-            neg_tgt_idx = arg_feat_overlap[-2]
-            neg_tgt_ent = gold_entities[neg_tgt_idx]
-
-            # sample "out"-features
-            out_pos_feats = (tgt_gold_ent ^ ff_pred_ent) & (1-neg_tgt_ent)
-            out_pred_domain = np.where(out_pos_feats)[0]
-            np.random.shuffle(out_pred_domain)
-            out_idxs = out_pred_domain[:opt.constraint_strength]
-
-            # sample "neg"-features
-            out_neg_feats = neg_tgt_ent & (1 - tgt_gold_ent)
-            out_neg_domain = np.where(out_neg_feats)[0]
-            np.random.shuffle(out_neg_domain)
-            neg_idxs = out_neg_domain[:opt.constraint_strength]
-
-            # fill in constraint
-            ff_constraint[in_idxs] = 1
-            ff_constraint[out_idxs] = 1
-            ff_constraint[neg_idxs] = -1
-
-            if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
-                break
-
-        constraints.append(ff_constraint)
+        # TODO:
 
     return constraints
 
@@ -547,45 +371,6 @@ def run_mock_ml_sl(opt,
 
             ## NOTE: JUST FOR TESTING
             #constraints = [(2*ent - 1) for ent in gold_entities]
-
-        logger.debug('*** START - Computing Viable Placements ***')
-        # update constraints and viable placements
-        viable_placements = []
-        for xi in constraints:
-            compatible_nodes = constraint_compatible_nodes(
-                opt, pred_tree_nodes, xi, compat_func, num_points
-            )
-            viable_placements.append(
-                sorted(
-                    compatible_nodes,
-                    key=lambda x: (x[0], x[1].uid),
-                    reverse=True
-                )
-            )
-        logger.debug('*** END - Computing Viable Placements ***')
-
-        logger.debug('*** START - Assigning Constraints ***')
-        # solve structured prediction problem of jointly placing the constraints
-        placements_out = match_constraints(
-            constraints,
-            viable_placements,
-            lca_check,
-            allow_no_match=False    # may change this arg later
-        )
-        assert placements_out is not None
-        _, resolved_placements = placements_out
-        logger.debug('*** END - Assigning Constraints ***')
-
-        logger.debug('*** START - Projecting Assigned Constraints ***')
-        # reset all leaf transformed_rep's
-        for node in leaves:
-            node.transformed_rep = copy.deepcopy(node.raw_rep)
-
-        # project resolved constraint placements to leaves
-        for xi, rp in zip(constraints, resolved_placements):
-            for node in rp.get_leaves():
-                node.transformed_rep |= xi
-        logger.debug('*** END - Projecting Assigned Constraints ***')
 
     embed()
     exit()
