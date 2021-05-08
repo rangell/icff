@@ -303,8 +303,7 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
-    # TODO: fix fits computation - this is grave underestimate of information provided by constraints
-    fits = 2*len(constraints)
+    fits = np.sum([np.sum(points[a] | points[b]) for _, a, b in constraints])
     dp = dendrogram_purity(pred_tree_nodes, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
     adj_mut_info = adj_mi(pred_labels, labels)
@@ -356,6 +355,19 @@ def run_mock_ml_sl(opt,
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
+
+	## TESTING: generate some fake constraints
+    #pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
+    #pos_edges = list(zip(*pos_idxs))
+    #random.shuffle(pos_edges)
+
+    #neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
+    #neg_edges = list(zip(*neg_idxs))
+    #random.shuffle(neg_edges)
+
+    #constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
+    #constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
+    #random.shuffle(constraints)
 
     for r in range(opt.max_rounds):
         logger.debug('*** START - Clustering Points ***')
