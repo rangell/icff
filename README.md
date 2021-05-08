@@ -14,13 +14,24 @@ python src/icff.py [OPTIONS]
 - Fix cut objective to match the paper
 - Fix feedback generation (add strength parameter)
 - Sort order of equivalent assignments (assign step)?
-
+- Must and shouldn't link constraints
 
 # TODO
-- Must and shouldn't link constraints
+- Fits computation for ml/sl
 - Support for real datasets
  - BoW document clustering
  - Entity Resolution
 - Different way of generating synthetic data?
 - Gurobi & or-tools integration?
 - Plotting/tracking experiments
+
+# Plan B's
+- Change linkage / objective
+  - average
+  - single
+  - generic linkage function
+
+# Paper TODOs
+- Change definition of the features we are providing feedback about are not
+  the only features going into the similarity function
+- 

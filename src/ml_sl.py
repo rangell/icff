@@ -303,6 +303,7 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
+    # TODO: fix fits computation - this is grave underestimate of information provided by constraints
     fits = 2*len(constraints)
     dp = dendrogram_purity(pred_tree_nodes, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
