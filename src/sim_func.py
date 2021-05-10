@@ -25,10 +25,13 @@ def jaccard_sim(a, b):
 
 
 def cos_sim(a, b):
-    inf_mask = (np.any(a == -np.inf, axis=1)[:,None]
-                | np.any(b == -np.inf, axis=1)[None, :])
-    a[a == -np.inf] = 0
-    b[b == -np.inf] = 0
+    #inf_mask = (np.any(a == -np.inf, axis=1)[:,None]
+    #            | np.any(b == -np.inf, axis=1)[None, :])
+    #a[a == -np.inf] = 0
+    #b[b == -np.inf] = 0
     scores = cosine_similarity(a, b)
-    scores[inf_mask] = -np.inf
+    if np.sum(a == -np.inf) + np.sum(b == -np.inf) > 0:
+        embed()
+        exit()
+    #scores[inf_mask] = -np.inf
     return scores

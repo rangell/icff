@@ -1,6 +1,7 @@
 import os
 import gc
 import copy
+import time
 import pickle
 import random
 import logging
@@ -11,10 +12,18 @@ from functools import reduce
 from itertools import product
 
 import numpy as np
+import scipy.sparse as sp
 from scipy.sparse import csr_matrix, coo_matrix
 from scipy.cluster.hierarchy import fcluster
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
+from sklearn.preprocessing import normalize
+
+from sparse_dot_mkl import dot_product_mkl
+
+logging.getLogger('nmslib').setLevel(logging.WARNING)
+
+import nmslib
 
 from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
@@ -32,7 +41,62 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
+def self_nn(level_set, cannot_link_idxs, topk=3):
+    time1 = time.time()
+    cannot_link_pairs = list(zip(*cannot_link_idxs))
+    level_set_normd = normalize(level_set, norm='l2', axis=1)
+    time2 = time.time()
+    #index = nmslib.init(
+    #    method='hnsw',
+    #    space='negdotprod_sparse_fast',
+    #    data_type=nmslib.DataType.SPARSE_VECTOR
+    #)
+    #index.addDataPointBatch(level_set_normd)
+    #index.createIndex({'post': 2}, print_progress=False)
+
+    dot_product_mkl(level_set_normd, level_set_normd.T)
+
+    time3 = time.time()
+
+    ## get all nearest neighbours for all the datapoint
+    ## using a pool of 20 threads to compute
+    #sparse_nn = index.knnQueryBatch(level_set_normd, k=topk, num_threads=40)
+    
+    time4 = time.time()
+
+    #idxs, dists = zip(*sparse_nn) 
+    #idxs = np.vstack(idxs)[:,1:]
+    #dists = np.vstack(dists)[:,1:].reshape(-1,)
+    #coords = [(i, x) for i, l in enumerate(idxs) for x in l]
+    #global_cands = sorted(list(zip(coords, dists)), key=lambda x : x[1])
+    time5 = time.time()
+        
+    print(
+        '1->2: {}, 2->3: {}, 3->4: {}, 4->5: {}'.format(
+            round(time2-time1, 4),
+            round(time3-time2, 4),
+            round(time4-time3, 4),
+            round(time5-time4, 4),
+        )
+    )
+
+    embed()
+    exit()
+
+    for coord, neg_sim in global_cands:
+        if coord[0] != coord[1] and coord not in cannot_link_pairs:
+            return (
+                (np.array([coord[0]]), np.array([coord[1]])),
+                1 + neg_sim
+            )
+
+    logger.warning('GOT HERE!')
+    embed()
+    exit()
+
+
 def custom_hac(points, sim_func, constraints):
+
     level_set = points.astype(float)
     Z = []
 
@@ -40,13 +104,18 @@ def custom_hac(points, sim_func, constraints):
     must_link_gen = iter([(a, b) for p, a, b in constraints if p == np.inf])
     forced_mergers_left = True
 
-    cannot_link_pairs = [(a, b) for p, a, b in constraints if p == -np.inf]
+    cannot_link_pairs = set([(a, b) for p, a, b in constraints if p == -np.inf])
     cannot_link_idxs = tuple(np.array(l) for l in zip(*cannot_link_pairs))
 
     uids = np.arange(level_set.shape[0])
     num_leaves = np.ones_like(uids)
+    agglom_dist = np.inf
 
     while level_set.shape[0] > 1:
+
+        print(level_set.shape[0])
+
+        time1 = time.time()
 
         # get next agglomeration
         if forced_mergers_left:
@@ -63,31 +132,43 @@ def custom_hac(points, sim_func, constraints):
             except StopIteration:
                 forced_mergers_left = False
 
+        time2 = time.time()
         if not forced_mergers_left:
-            dist_mx = np.triu(1 - sim_func(level_set, level_set) + 1e-8, k=1)
-            violate_mask = np.zeros_like(dist_mx).astype(bool)
-            if len(cannot_link_idxs) > 0:
-                violate_mask[cannot_link_idxs] = True
-            dist_mx[violate_mask] = np.inf
-
-            agglom_coord = np.where(dist_mx == dist_mx[dist_mx != 0].min())
-            agglom_coord = tuple(map(lambda x : x[0:1], agglom_coord))
+            agglom_coord, agglom_dist = self_nn(level_set, cannot_link_idxs)
             agglom_ind = np.array(list(map(lambda x : x[0], agglom_coord)))
+
+        time3 = time.time()
 
         agglom_mask = np.zeros_like(uids, dtype=bool)
         agglom_mask[agglom_ind] = True
-        if forced_mergers_left or not violate_mask[agglom_coord].item():
-            agglom_rep = reduce(
-                lambda a, b : a | b,
-                level_set[agglom_mask].astype(int)
+        if forced_mergers_left or agglom_dist != -np.inf:
+            agglom_rep_col = list(
+                set(level_set[agglom_mask].tocoo().col.tolist())
+            )
+            agglom_rep_row = [0] * len(agglom_rep_col)
+            agglom_rep_data = [1] * len(agglom_rep_col)
+            agglom_rep = csr_matrix(
+                (agglom_rep_data, (agglom_rep_row, agglom_rep_col)),
+                shape=(1, level_set.shape[1]),
+                dtype=float
             )
         else:
-            agglom_rep = np.ones_like(level_set[0]) * -np.inf
+            agglom_rep = csr_matrix(
+                ([-np.inf], ([0], [0])),
+                shape=(1, level_set.shape[1]),
+                dtype=float
+            )
+            embed()
+            exit()
+
+        time4 = time.time()
 
         # update data structures
-        linkage_score = np.inf if forced_mergers_left else dist_mx[agglom_coord]
+        linkage_score = np.inf if forced_mergers_left else agglom_dist
         not_agglom_mask = ~agglom_mask
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
+
+        time5 = time.time()
 
         # update linkage matrix
         Z.append(
@@ -100,8 +181,8 @@ def custom_hac(points, sim_func, constraints):
         )
 
         # update level set
-        level_set = np.concatenate(
-            (level_set[not_agglom_mask], agglom_rep[None,:])
+        level_set = sp.vstack(
+            (level_set[not_agglom_mask], agglom_rep)
         )
 
         # update set union
@@ -129,6 +210,18 @@ def custom_hac(points, sim_func, constraints):
         cannot_link_idxs = tuple(
             v_remap_cannot_idxs(l) for l in cannot_link_idxs
         )
+        time6 = time.time()
+        
+        print(
+            '1->2: {}, 2->3: {}, 3->4: {}, 4->5: {}, 5->6: {}'.format(
+                round(time2-time1, 4),
+                round(time3-time2, 4),
+                round(time4-time3, 4),
+                round(time5-time4, 4),
+                round(time6-time5, 4)
+            )
+        )
+
 
     # return the linkage matrix
     Z = np.vstack(Z)
@@ -144,6 +237,7 @@ def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
     else:
         assert opt.cluster_obj_reps == 'transformed'
         reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
+    # TODO: fixme, look at custom HAC for how we agglomerate
     canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
     rep_affinities = sim_func(reps, canon_rep)
     return np.sum(rep_affinities) / num_points
@@ -244,7 +338,7 @@ def cluster_points(opt,
                    constraints,
                    cost_per_cluster):
     # pull out all of the points
-    points = np.vstack([x.transformed_rep for x in leaf_nodes])
+    points = sp.vstack([x.transformed_rep for x in leaf_nodes])
     num_points = points.shape[0]
     num_constraints = len(constraints)
 
@@ -349,28 +443,24 @@ def run_mock_ml_sl(opt,
                    mentions,
                    mention_labels,
                    sim_func):
-
-    embed()
-    exit()
-
     num_points = mentions.shape[0]
     constraints = []
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
-	## TESTING: generate some fake constraints
-    #pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
-    #pos_edges = list(zip(*pos_idxs))
-    #random.shuffle(pos_edges)
+	# TESTING: generate some fake constraints
+    pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
+    pos_edges = list(zip(*pos_idxs))
+    random.shuffle(pos_edges)
 
-    #neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
-    #neg_edges = list(zip(*neg_idxs))
-    #random.shuffle(neg_edges)
+    neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
+    neg_edges = list(zip(*neg_idxs))
+    random.shuffle(neg_edges)
 
-    #constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
-    #constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
-    #random.shuffle(constraints)
+    constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
+    constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
+    random.shuffle(constraints)
 
     for r in range(opt.max_rounds):
         logger.debug('*** START - Clustering Points ***')
