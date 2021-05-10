@@ -15,9 +15,9 @@ python src/icff.py [OPTIONS]
 - Fix feedback generation (add strength parameter)
 - Sort order of equivalent assignments (assign step)?
 - Must and shouldn't link constraints
+- Fits computation for ml/sl
 
 # TODO
-- Fits computation for ml/sl
 - Support for real datasets
  - BoW document clustering
  - Entity Resolution

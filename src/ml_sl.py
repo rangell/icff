@@ -424,6 +424,11 @@ def get_opt():
     parser.add_argument("--data_dir", default=None, type=str,
                         help="The directory where data is stored.")
 
+    # real dataset
+    parser.add_argument("--datafile", default=None, type=str,
+                        help="preprocessed data pickle file in data_dir")
+
+    # opts for building synthetic data
     parser.add_argument('--num_entities', type=int, default=2,
                         help="number of entities to generate when generating"\
                              "synthetic data")
@@ -439,7 +444,7 @@ def get_opt():
                         help="proportion of entity features added to mention")
 
     parser.add_argument('--cost_per_cluster', type=float, default=0.5,
-                        help="proportion of entity features added to mention")
+                        help="lambda hyperparameter from paper")
 
     parser.add_argument('--sim_func', type=str,
                         choices=['cosine', 'jaccard'], default='cosine',
@@ -487,23 +492,28 @@ def main():
     # initialize the experiment
     initialize_exp(opt)
 
-    # get or create the synthetic data
-    data_fname = '{}/synth_data-{}_{}_{}_{}_{}-{}.pkl'.format(
-        opt.data_dir,
-        opt.num_entities,
-        opt.num_mentions,
-        opt.data_dim,
-        opt.entity_noise_prob,
-        opt.mention_sample_prob,
-        opt.seed
-    )
-    if not os.path.exists(data_fname):
-        with open(data_fname, 'wb') as f:
-            gold_entities, mentions, mention_labels = gen_data(opt)
-            pickle.dump((gold_entities, mentions, mention_labels), f)
-    else:
-        with open(data_fname, 'rb') as f:
+    if opt.datafile is not None:
+        # get real data
+        with open(opt.datafile, 'rb') as f:
             gold_entities, mentions, mention_labels = pickle.load(f)
+    else:
+        # get or create the synthetic data
+        data_fname = '{}/synth_data-{}_{}_{}_{}_{}-{}.pkl'.format(
+            opt.data_dir,
+            opt.num_entities,
+            opt.num_mentions,
+            opt.data_dim,
+            opt.entity_noise_prob,
+            opt.mention_sample_prob,
+            opt.seed
+        )
+        if not os.path.exists(data_fname):
+            with open(data_fname, 'wb') as f:
+                gold_entities, mentions, mention_labels = gen_data(opt)
+                pickle.dump((gold_entities, mentions, mention_labels), f)
+        else:
+            with open(data_fname, 'rb') as f:
+                gold_entities, mentions, mention_labels = pickle.load(f)
 
     # declare similarity and compatibility functions with function pointers
     sim_func = set_sim_func(opt)

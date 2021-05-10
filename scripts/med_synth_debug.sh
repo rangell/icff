@@ -5,7 +5,7 @@ conda activate icff
 
 python src/icff.py\
     --seed=27\
-    --data_dir="data/"\
+    --data_dir="data/synth/"\
     --num_entities=10\
     --num_mentions=100\
     --data_dim=256\
