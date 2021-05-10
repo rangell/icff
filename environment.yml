@@ -1,0 +1,4 @@
+name: name_of_your_env
+channels:
+  - defaults
+prefix: /Users/rangell/miniconda3/envs/name_of_your_env

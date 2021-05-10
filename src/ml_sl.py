@@ -350,6 +350,9 @@ def run_mock_ml_sl(opt,
                    mention_labels,
                    sim_func):
 
+    embed()
+    exit()
+
     num_points = mentions.shape[0]
     constraints = []
 
@@ -425,7 +428,7 @@ def get_opt():
                         help="The directory where data is stored.")
 
     # real dataset
-    parser.add_argument("--datafile", default=None, type=str,
+    parser.add_argument("--data_file", default=None, type=str,
                         help="preprocessed data pickle file in data_dir")
 
     # opts for building synthetic data
@@ -492,9 +495,9 @@ def main():
     # initialize the experiment
     initialize_exp(opt)
 
-    if opt.datafile is not None:
+    if opt.data_file is not None:
         # get real data
-        with open(opt.datafile, 'rb') as f:
+        with open('{}/{}'.format(opt.data_dir, opt.data_file), 'rb') as f:
             gold_entities, mentions, mention_labels = pickle.load(f)
     else:
         # get or create the synthetic data
