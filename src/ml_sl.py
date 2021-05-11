@@ -117,11 +117,7 @@ def custom_hac(points, sim_func, constraints):
         else:
             agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
 
-        try:
-            assert np.sum(agglom_mask) == 2
-        except:
-            embed()
-            exit()
+        assert np.sum(agglom_mask) == 2
 
         # update data structures
         linkage_score = np.inf if forced_mergers_left else sim_mx[agglom_coord]
@@ -158,8 +154,6 @@ def custom_hac(points, sim_func, constraints):
             level_set_normd, agglom_rep_normd.T, dense=True
         )
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
-        #if num_untouched > 0:
-        #    sim_mx[num_untouched, num_untouched] = -np.inf
 
         # update set union
         next_uid = np.max(uids) + 1
