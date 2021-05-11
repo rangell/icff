@@ -37,9 +37,23 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-def custom_hac(points, sim_func, constraints):
+MIN_FLOAT = np.finfo(float).min
 
-    MIN_FLOAT = np.finfo(float).min
+
+def sparse_agglom_rep(S):
+    # sparse agglomeration of rows of S
+    agglom_rep_col = list(set(S.tocoo().col.tolist()))
+    agglom_rep_row = [0] * len(agglom_rep_col)
+    agglom_rep_data = [1] * len(agglom_rep_col)
+    agglom_rep = csr_matrix(
+        (agglom_rep_data, (agglom_rep_row, agglom_rep_col)),
+        shape=(1, S.shape[1]),
+        dtype=float
+    )
+    return agglom_rep
+
+
+def custom_hac(points, sim_func, constraints):
 
     level_set = points.astype(float)
     Z = []
@@ -61,7 +75,6 @@ def custom_hac(points, sim_func, constraints):
     sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
  
     for _ in trange(level_set.shape[0] - 1):
-
         # get next agglomeration
         if forced_mergers_left:
             try:
@@ -86,16 +99,7 @@ def custom_hac(points, sim_func, constraints):
         agglom_mask[agglom_ind] = True
 
         if forced_mergers_left or sim_mx[agglom_coord].item() > MIN_FLOAT:
-            agglom_rep_col = list(
-                set(level_set[agglom_mask].tocoo().col.tolist())
-            )
-            agglom_rep_row = [0] * len(agglom_rep_col)
-            agglom_rep_data = [1] * len(agglom_rep_col)
-            agglom_rep = csr_matrix(
-                (agglom_rep_data, (agglom_rep_row, agglom_rep_col)),
-                shape=(1, level_set.shape[1]),
-                dtype=float
-            )
+            agglom_rep = sparse_agglom_rep(level_set[agglom_mask])
         else:
             agglom_rep = csr_matrix(
                 ([], ([], [])),
@@ -174,9 +178,6 @@ def custom_hac(points, sim_func, constraints):
 
     # return the linkage matrix
     Z = np.vstack(Z)
-
-    embed()
-    exit()
 
     return Z
 
@@ -302,7 +303,11 @@ def cluster_points(opt,
     new_node_id = num_points
     assert new_node_id == len(pred_tree_nodes)
     for merge_idx, merger in enumerate(Z):
-        lchild, rchild = int(merger[0]), int(merger[1])
+        lchild, rchild, score = int(merger[0]), int(merger[1]), merger[2]
+
+        embed()
+        exit()
+
         lc_tr = pred_tree_nodes[lchild].transformed_rep
         rc_tr = pred_tree_nodes[rchild].transformed_rep
         
