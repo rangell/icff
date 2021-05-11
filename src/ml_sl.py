@@ -22,10 +22,11 @@ from sklearn.preprocessing import normalize
 
 from sparse_dot_mkl import dot_product_mkl
 
+import higra as hg
+
 from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
 from match import match_constraints, lca_check, viable_match_check
-from metrics import dendrogram_purity
 from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
@@ -53,6 +54,13 @@ def sparse_agglom_rep(S):
     return agglom_rep
 
 
+def get_nil_rep(rep_dim=None):
+    assert rep_dim is not None
+    return csr_matrix(
+        ([], ([], [])), shape=(1, rep_dim), dtype=float
+    )
+
+
 def custom_hac(points, sim_func, constraints):
 
     level_set = points.astype(float)
@@ -63,7 +71,6 @@ def custom_hac(points, sim_func, constraints):
 
     level_set_normd = normalize(level_set, norm='l2', axis=1)
     sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
-    sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf # ignore diag
 
     set_union = list(range(points.shape[0]))
     must_link_gen = iter([(a, b) for p, a, b in constraints if p == np.inf])
@@ -72,20 +79,27 @@ def custom_hac(points, sim_func, constraints):
     cannot_link_pairs = list(set([(a, b) for p, a, b in constraints if p == -np.inf]))
     cannot_link_pairs += [(b, a) for a, b in cannot_link_pairs]
     cannot_link_idxs = tuple(np.array(l) for l in zip(*cannot_link_pairs))
-    sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
+    if len(cannot_link_pairs) > 0:
+        sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
  
     for _ in trange(level_set.shape[0] - 1):
+
+        sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf # ignore diag
+
         # get next agglomeration
         if forced_mergers_left:
             try:
-                luid, ruid = next(must_link_gen)
-                # set union check
-                while luid != set_union[luid]:
-                    luid = set_union[luid]
-                while ruid != set_union[ruid]:
-                    ruid = set_union[ruid]
-                luid = np.where(uids == luid)[0].item()
-                ruid = np.where(uids == ruid)[0].item()
+                while True:
+                    luid, ruid = next(must_link_gen)
+                    # set union check
+                    while luid != set_union[luid]:
+                        luid = set_union[luid]
+                    while ruid != set_union[ruid]:
+                        ruid = set_union[ruid]
+                    luid = np.where(uids == luid)[0].item()
+                    ruid = np.where(uids == ruid)[0].item()
+                    if luid != ruid:
+                        break
                 agglom_ind = np.array([luid, ruid])
             except StopIteration:
                 forced_mergers_left = False
@@ -101,11 +115,13 @@ def custom_hac(points, sim_func, constraints):
         if forced_mergers_left or sim_mx[agglom_coord].item() > MIN_FLOAT:
             agglom_rep = sparse_agglom_rep(level_set[agglom_mask])
         else:
-            agglom_rep = csr_matrix(
-                ([], ([], [])),
-                shape=(1, level_set.shape[1]),
-                dtype=float
-            )
+            agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
+
+        try:
+            assert np.sum(agglom_mask) == 2
+        except:
+            embed()
+            exit()
 
         # update data structures
         linkage_score = np.inf if forced_mergers_left else sim_mx[agglom_coord]
@@ -142,8 +158,8 @@ def custom_hac(points, sim_func, constraints):
             level_set_normd, agglom_rep_normd.T, dense=True
         )
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
-        if num_untouched > 0:
-            sim_mx[num_untouched, num_untouched] = -np.inf
+        #if num_untouched > 0:
+        #    sim_mx[num_untouched, num_untouched] = -np.inf
 
         # update set union
         next_uid = np.max(uids) + 1
@@ -162,16 +178,17 @@ def custom_hac(points, sim_func, constraints):
         )
 
         # update cannot_link_idxs
-        def remap_cannot_idxs(idx):
-            if idx in agglom_ind:
-                return uids.size - 1
-            return idx - np.sum(idx > agglom_ind)
-        v_remap_cannot_idxs = np.vectorize(remap_cannot_idxs)
-        cannot_link_idxs = tuple(
-            v_remap_cannot_idxs(l) for l in cannot_link_idxs
-        )
+        if len(cannot_link_pairs) > 0:
+            def remap_cannot_idxs(idx):
+                if idx in agglom_ind:
+                    return uids.size - 1
+                return idx - np.sum(idx > agglom_ind)
+            v_remap_cannot_idxs = np.vectorize(remap_cannot_idxs)
+            cannot_link_idxs = tuple(
+                v_remap_cannot_idxs(l) for l in cannot_link_idxs
+            )
 
-        sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
+            sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
 
     # sanity check
     assert level_set.shape[0] == 1
@@ -185,14 +202,17 @@ def custom_hac(points, sim_func, constraints):
 def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
     subcluster_leaves = subcluster.get_leaves()
     assert len(subcluster_leaves) > 0
+
     if opt.cluster_obj_reps == 'raw':
-        reps = np.vstack([n.raw_rep for n in subcluster_leaves])
+        reps = sp.vstack([n.raw_rep for n in subcluster_leaves])
     else:
         assert opt.cluster_obj_reps == 'transformed'
-        reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
-    # TODO: fixme, look at custom HAC for how we agglomerate
-    canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
-    rep_affinities = sim_func(reps, canon_rep)
+        reps = sp.vstack([n.transformed_rep for n in subcluster_leaves])
+
+    canon_rep = sparse_agglom_rep(reps)
+    canon_rep_normd = normalize(canon_rep, norm='l2', axis=1)
+    reps_normd = normalize(reps, norm='l2', axis=1)
+    rep_affinities = dot_product_mkl(reps_normd, canon_rep_normd.T, dense=True)
     return np.sum(rep_affinities) / num_points
 
 
@@ -301,31 +321,26 @@ def cluster_points(opt,
     # build the tree
     pred_tree_nodes = copy.copy(leaf_nodes) # shallow copy on purpose!
     new_node_id = num_points
+    struct_node_list = np.arange(2*num_points - 1) # used for higra's dp
     assert new_node_id == len(pred_tree_nodes)
     for merge_idx, merger in enumerate(Z):
         lchild, rchild, score = int(merger[0]), int(merger[1]), merger[2]
 
-        embed()
-        exit()
+        struct_node_list[lchild] = new_node_id
+        struct_node_list[rchild] = new_node_id
 
-        lc_tr = pred_tree_nodes[lchild].transformed_rep
-        rc_tr = pred_tree_nodes[rchild].transformed_rep
-        
-        default_conflict_tr = np.ones_like(lc_tr) * -np.inf
+        lc_rr = pred_tree_nodes[lchild].raw_rep
+        rc_rr = pred_tree_nodes[rchild].raw_rep
 
-        # if invalid merger
-        if np.array_equal(default_conflict_tr, lc_tr)\
-                or np.array_equal(default_conflict_tr, rc_tr)\
-                or np.any(np.abs(lc_tr - rc_tr) == 2):
-            new_transformed_rep = default_conflict_tr
+        if score > MIN_FLOAT:
+            agglom_raw_rep = sparse_agglom_rep(sp.vstack((lc_rr, rc_rr)))
         else:
-            new_transformed_rep = lc_tr | rc_tr
+            agglom_raw_rep = get_nil_rep(rep_dim=lc_rr.shape[1])
 
         pred_tree_nodes.append(
             TreeNode(
                 new_node_id,
-                pred_tree_nodes[lchild].raw_rep | pred_tree_nodes[rchild].raw_rep,
-                transformed_rep=new_transformed_rep,
+                agglom_raw_rep,
                 children=[pred_tree_nodes[lchild], pred_tree_nodes[rchild]]
             )
         )
@@ -354,8 +369,12 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
-    fits = np.sum([np.sum(points[a] | points[b]) for _, a, b in constraints])
-    dp = dendrogram_purity(pred_tree_nodes, labels)
+    fits = np.sum([
+        np.sum(sparse_agglom_rep(sp.vstack((points[a], points[b]))))
+            for _, a, b in constraints
+    ])
+    hg_tree = hg.Tree(struct_node_list)
+    dp = hg.dendrogram_purity(hg_tree, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
     adj_mut_info = adj_mi(pred_labels, labels)
 
@@ -387,6 +406,9 @@ def gen_constraint(opt,
     random.shuffle(candidate_constraints)
     
     for a, b in candidate_constraints[:num_to_generate]:
+        if a == b:
+            embed()
+            exit()
         if gold_pw_cc[a, b]:
             constraints.append((np.inf, a, b))
         else:
@@ -406,18 +428,18 @@ def run_mock_ml_sl(opt,
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
-	# TESTING: generate some fake constraints
-    pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
-    pos_edges = list(zip(*pos_idxs))
-    random.shuffle(pos_edges)
+	## TESTING: generate some fake constraints
+    #pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
+    #pos_edges = list(zip(*pos_idxs))
+    #random.shuffle(pos_edges)
 
-    neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
-    neg_edges = list(zip(*neg_idxs))
-    random.shuffle(neg_edges)
+    #neg_idxs = np.where((mention_labels[:, None] != mention_labels[None, :]))
+    #neg_edges = list(zip(*neg_idxs))
+    #random.shuffle(neg_edges)
 
-    constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
-    constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
-    random.shuffle(constraints)
+    #constraints.extend([(np.inf, a, b) for a, b in pos_edges[:5]])
+    #constraints.extend([(-np.inf, a, b) for a, b in neg_edges[:5]])
+    #random.shuffle(constraints)
 
     for r in range(opt.max_rounds):
         logger.debug('*** START - Clustering Points ***')
@@ -566,6 +588,7 @@ def main():
                 gold_entities, mentions, mention_labels = pickle.load(f)
 
     # declare similarity and compatibility functions with function pointers
+    assert opt.sim_func == 'cosine' # TODO: support more sim funcs
     sim_func = set_sim_func(opt)
 
     # run the core function
