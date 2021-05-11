@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 def custom_hac(points, sim_func, constraints):
 
+    MIN_FLOAT = np.finfo(float).min
+
     level_set = points.astype(float)
     Z = []
 
@@ -56,7 +58,7 @@ def custom_hac(points, sim_func, constraints):
     cannot_link_pairs = list(set([(a, b) for p, a, b in constraints if p == -np.inf]))
     cannot_link_pairs += [(b, a) for a, b in cannot_link_pairs]
     cannot_link_idxs = tuple(np.array(l) for l in zip(*cannot_link_pairs))
-    sim_mx[cannot_link_idxs] = -np.inf # don't choose these if we can avoid it
+    sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
  
     for _ in trange(level_set.shape[0] - 1):
 
@@ -83,7 +85,7 @@ def custom_hac(points, sim_func, constraints):
         agglom_mask = np.zeros_like(uids, dtype=bool)
         agglom_mask[agglom_ind] = True
 
-        if forced_mergers_left or sim_mx[agglom_coord] != -np.inf:
+        if forced_mergers_left or sim_mx[agglom_coord].item() > MIN_FLOAT:
             agglom_rep_col = list(
                 set(level_set[agglom_mask].tocoo().col.tolist())
             )
@@ -100,8 +102,6 @@ def custom_hac(points, sim_func, constraints):
                 shape=(1, level_set.shape[1]),
                 dtype=float
             )
-            embed()
-            exit()
 
         # update data structures
         linkage_score = np.inf if forced_mergers_left else sim_mx[agglom_coord]
@@ -167,13 +167,16 @@ def custom_hac(points, sim_func, constraints):
             v_remap_cannot_idxs(l) for l in cannot_link_idxs
         )
 
-        sim_mx[cannot_link_idxs] = -np.inf # don't choose these if we can avoid it
+        sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
 
     # sanity check
     assert level_set.shape[0] == 1
 
     # return the linkage matrix
     Z = np.vstack(Z)
+
+    embed()
+    exit()
 
     return Z
 
