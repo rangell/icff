@@ -5,7 +5,16 @@ import random
 import pickle
 import time
 from datetime import datetime, timedelta
+from collections import defaultdict
+
 import numpy as np
+from scipy.sparse import csr_matrix
+
+from IPython import embed
+
+
+MIN_FLOAT = np.finfo(float).min
+MAX_FLOAT = np.finfo(float).max
 
 
 def initialize_exp(opt):
@@ -112,3 +121,34 @@ def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
 
+
+class InvalidAgglomError(Exception):
+    pass
+
+
+def sparse_agglom_rep(S):
+    # sparse agglomeration of rows of S
+    _S = S.tocoo()
+    coord_map = defaultdict(set)
+    for c, d in zip(_S.col, _S.data):
+        coord_map[(0, c)].add(d)  # row is always 0
+        
+    if any([d == set([-1, 1]) for d in coord_map.values()]):
+        raise InvalidAgglomError
+
+    agglom_row, agglom_col, agglom_data = zip(*[
+        (r, c, list(d)[0]) for (r, c), d in coord_map.items()
+    ])
+    agglom_rep = csr_matrix(
+        (agglom_data, (agglom_row, agglom_col)),
+        shape=(1, S.shape[1]),
+        dtype=float
+    )
+    return agglom_rep
+
+
+def get_nil_rep(rep_dim=None):
+    assert rep_dim is not None
+    return csr_matrix(
+        ([], ([], [])), shape=(1, rep_dim), dtype=float
+    )

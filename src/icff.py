@@ -8,21 +8,32 @@ from collections import defaultdict
 from heapq import heappop, heappush, heapify
 from functools import reduce
 from itertools import product
+from tqdm import tqdm, trange
 
 import numpy as np
+import scipy.sparse as sp
 from scipy.sparse import csr_matrix, coo_matrix
 from scipy.cluster.hierarchy import fcluster
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
+from sklearn.preprocessing import normalize
+
+from sparse_dot_mkl import dot_product_mkl
+
+import higra as hg
 
 from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
 from match import match_constraints, lca_check, viable_match_check
-from metrics import dendrogram_purity
 from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
-from utils import initialize_exp
+from utils import (MIN_FLOAT,
+                   MAX_FLOAT,
+                   InvalidAgglomError,
+                   initialize_exp,
+                   sparse_agglom_rep,
+                   get_nil_rep)
 
 from IPython import embed
 
@@ -31,63 +42,95 @@ logger = logging.getLogger(__name__)
 
 
 def custom_hac(points, sim_func):
+
+    # FIXME: sim_func is unused
+
     level_set = points.astype(float)
     uids = np.arange(level_set.shape[0])
     num_leaves = np.ones_like(uids)
     Z = []
 
-    while level_set.shape[0] > 1:
-        # compute dist matrix
-        dist_mx = np.triu(1 - sim_func(level_set, level_set) + 1e-8, k=1)
+    level_set_normd = normalize(level_set, norm='l2', axis=1)
+    sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
 
-        # this checks to see if two sub-clusters have features which violate
-        # each other -- i.e. one has a feature and the other has *not* that
-        # feature
-        violate_mask = np.sum(
-            np.abs(level_set[:,None,:] - level_set[None, :, :]) == 2,
-            axis=-1
-        ).astype(bool)
-
-        # set violating indices to inf
-        dist_mx[violate_mask] = np.inf
+    for _ in trange(level_set.shape[0]-1):
+        sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf # ignore diag
 
         # get next agglomeration
-        agglom_coord = np.where(dist_mx == dist_mx[dist_mx != 0].min())
-        agglom_coord = tuple(map(lambda x : x[0:1], agglom_coord))
-        agglom_ind = np.array(list(map(lambda x : x[0], agglom_coord)))
-        agglom_mask = np.zeros_like(uids, dtype=bool)
-        agglom_mask[agglom_ind] = True
-        if np.any(violate_mask[agglom_coord]):
-            agglom_rep = np.ones_like(level_set[0]) * -np.inf
-        else:
-            agglom_rep = reduce(
-                lambda a, b : a | b,
-                level_set[agglom_mask].astype(int)
-            )
+        while True:
+            agglom_coord = np.where(sim_mx == sim_mx.max())
+            agglom_coord = tuple(map(lambda x : x[0:1], agglom_coord))
+            agglom_ind = np.array(list(map(lambda x : x[0], agglom_coord)))
+
+            agglom_mask = np.zeros_like(uids, dtype=bool)
+            agglom_mask[agglom_ind] = True
+
+            if sim_mx[agglom_coord].item() > MIN_FLOAT:
+                try:
+                    agglom_rep = sparse_agglom_rep(level_set[agglom_mask])
+                except InvalidAgglomError:
+                    sim_mx[agglom_coord] = MIN_FLOAT
+                    continue
+            else:
+                agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
+            break
+            
+        assert np.sum(agglom_mask) == 2
 
         # update data structures
+        linkage_score = sim_mx[agglom_coord]
         not_agglom_mask = ~agglom_mask
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
+
+        # update linkage matrix
         Z.append(
             np.array(
                 [float(uids[agglom_ind[0]]),
                  float(uids[agglom_ind[1]]),
-                 float(dist_mx[agglom_coord]),
+                 float(linkage_score),
                  float(agglom_num_leaves)]
             )
         )
-        level_set = np.concatenate(
-            (level_set[not_agglom_mask], agglom_rep[None,:])
+
+        # update level set
+        level_set = sp.vstack(
+            (level_set[not_agglom_mask], agglom_rep)
         )
+
+        # update sim_mx
+        num_untouched = np.sum(not_agglom_mask)
+        sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
+        sim_mx = sim_mx.reshape(num_untouched, num_untouched)
+        sim_mx = np.concatenate(
+            (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
+        )
+        agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
+        level_set_normd = sp.vstack(
+            (level_set_normd[not_agglom_mask], agglom_rep_normd)
+        )
+        new_sims = dot_product_mkl(
+            level_set_normd, agglom_rep_normd.T, dense=True
+        )
+        sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
+
+        # update uids list
+        next_uid = np.max(uids) + 1
         uids = np.concatenate(
-            (uids[not_agglom_mask], np.array([np.max(uids) + 1]))
+            (uids[not_agglom_mask], np.array([next_uid]))
         )
+        # update num_leaves list
         num_leaves = np.concatenate(
             (num_leaves[not_agglom_mask], np.array([agglom_num_leaves]))
         )
 
+    # sanity check
+    assert level_set.shape[0] == 1
+
     # return the linkage matrix
     Z = np.vstack(Z)
+
+    embed()
+    exit()
     
     return Z
 
@@ -329,7 +372,7 @@ def cluster_points(opt,
                    constraints,
                    cost_per_cluster):
     # pull out all of the points
-    points = np.vstack([x.transformed_rep for x in leaf_nodes])
+    points = sp.vstack([x.transformed_rep for x in leaf_nodes])
     num_points = points.shape[0]
     num_constraints = len(constraints)
 
@@ -339,27 +382,32 @@ def cluster_points(opt,
     # build the tree
     pred_tree_nodes = copy.copy(leaf_nodes) # shallow copy on purpose!
     new_node_id = num_points
+    struct_node_list = np.arange(2*num_points - 1) # used for higra's dp
     assert new_node_id == len(pred_tree_nodes)
     for merge_idx, merger in enumerate(Z):
-        lchild, rchild = int(merger[0]), int(merger[1])
+        lchild, rchild, score = int(merger[0]), int(merger[1]), merger[2]
+
+        struct_node_list[lchild] = new_node_id
+        struct_node_list[rchild] = new_node_id
+
+        lc_rr = pred_tree_nodes[lchild].raw_rep
+        rc_rr = pred_tree_nodes[rchild].raw_rep
         lc_tr = pred_tree_nodes[lchild].transformed_rep
         rc_tr = pred_tree_nodes[rchild].transformed_rep
-        
-        default_conflict_tr = np.ones_like(lc_tr) * -np.inf
 
-        # if invalid merger
-        if np.array_equal(default_conflict_tr, lc_tr)\
-                or np.array_equal(default_conflict_tr, rc_tr)\
-                or np.any(np.abs(lc_tr - rc_tr) == 2):
-            new_transformed_rep = default_conflict_tr
+        agglom_raw_rep = sparse_agglom_rep(sp.vstack((lc_rr, rc_rr)))
+        if score > MIN_FLOAT:
+            agglom_transformed_rep = sparse_agglom_rep(
+                sp.vstack((lc_tr, rc_tr))
+            )
         else:
-            new_transformed_rep = lc_tr | rc_tr
+            agglom_transformed_rep = get_nil_rep(rep_dim=lc_rr.shape[1])
 
         pred_tree_nodes.append(
             TreeNode(
                 new_node_id,
-                pred_tree_nodes[lchild].raw_rep | pred_tree_nodes[rchild].raw_rep,
-                transformed_rep=new_transformed_rep,
+                agglom_raw_rep,
+                transformed_rep=agglom_transformed_rep,
                 children=[pred_tree_nodes[lchild], pred_tree_nodes[rchild]]
             )
         )
@@ -370,7 +418,6 @@ def cluster_points(opt,
         opt,
         pred_tree_nodes,
         sim_func,
-        compat_func,
         constraints,
         cost_per_cluster,
         num_points,
@@ -378,7 +425,7 @@ def cluster_points(opt,
     )
 
     # the predicted entities canonicalization
-    pred_canon_ents = np.vstack(
+    pred_canon_ents = sp.vstack(
         [n.raw_rep for n in cut_frontier_nodes]
     )
 
@@ -389,8 +436,12 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
-    fits = np.sum(np.vstack(constraints) != 0) if len(constraints) > 0 else 0
-    dp = dendrogram_purity(pred_tree_nodes, labels)
+    fits = np.sum([
+        np.sum(sparse_agglom_rep(sp.vstack((points[a], points[b]))))
+            for _, a, b in constraints
+    ])
+    hg_tree = hg.Tree(struct_node_list)
+    dp = hg.dendrogram_purity(hg_tree, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
     adj_mut_info = adj_mi(pred_labels, labels)
 
@@ -487,6 +538,16 @@ def run_mock_icff(opt,
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
+
+    # NOTE: JUST FOR TESTING
+    constraints = [(2*ent - 1) for ent in gold_entities.toarray()]
+    for i, xi in enumerate(constraints):
+        first_compat_idx = np.where(mention_labels == i)[0][0]
+        first_compat_mention = mentions[first_compat_idx]
+        transformed_rep = sparse_agglom_rep(
+            sp.vstack((first_compat_mention, csr_matrix(xi)))
+        )
+        leaves[i].transformed_rep = transformed_rep
 
     for r in range(opt.max_rounds):
         logger.debug('*** START - Clustering Points ***')
@@ -585,6 +646,11 @@ def get_opt():
     parser.add_argument("--data_dir", default=None, type=str,
                         help="The directory where data is stored.")
 
+    # real dataset
+    parser.add_argument("--data_file", default=None, type=str,
+                        help="preprocessed data pickle file in data_dir")
+
+    # opts for building synthetic data
     parser.add_argument('--num_entities', type=int, default=2,
                         help="number of entities to generate when generating"\
                              "synthetic data")
@@ -665,25 +731,31 @@ def main():
     # initialize the experiment
     initialize_exp(opt)
 
-    # get or create the synthetic data
-    data_fname = '{}/synth_data-{}_{}_{}_{}_{}-{}.pkl'.format(
-        opt.data_dir,
-        opt.num_entities,
-        opt.num_mentions,
-        opt.data_dim,
-        opt.entity_noise_prob,
-        opt.mention_sample_prob,
-        opt.seed
-    )
-    if not os.path.exists(data_fname):
-        with open(data_fname, 'wb') as f:
-            gold_entities, mentions, mention_labels = gen_data(opt)
-            pickle.dump((gold_entities, mentions, mention_labels), f)
-    else:
-        with open(data_fname, 'rb') as f:
+    if opt.data_file is not None:
+        # get real data
+        with open('{}/{}'.format(opt.data_dir, opt.data_file), 'rb') as f:
             gold_entities, mentions, mention_labels = pickle.load(f)
+    else:
+        # get or create the synthetic data
+        data_fname = '{}/synth_data-{}_{}_{}_{}_{}-{}.pkl'.format(
+            opt.data_dir,
+            opt.num_entities,
+            opt.num_mentions,
+            opt.data_dim,
+            opt.entity_noise_prob,
+            opt.mention_sample_prob,
+            opt.seed
+        )
+        if not os.path.exists(data_fname):
+            with open(data_fname, 'wb') as f:
+                gold_entities, mentions, mention_labels = gen_data(opt)
+                pickle.dump((gold_entities, mentions, mention_labels), f)
+        else:
+            with open(data_fname, 'rb') as f:
+                gold_entities, mentions, mention_labels = pickle.load(f)
 
     # declare similarity and compatibility functions with function pointers
+    assert opt.sim_func == 'cosine' # TODO: support more sim funcs
     sim_func = set_sim_func(opt)
     compat_func = set_compat_func(opt)
 

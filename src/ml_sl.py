@@ -30,7 +30,7 @@ from match import match_constraints, lca_check, viable_match_check
 from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
-from utils import initialize_exp
+from utils import MIN_FLOAT, initialize_exp, sparse_agglom_rep, get_nil_rep
 
 from IPython import embed
 
@@ -38,30 +38,8 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-MIN_FLOAT = np.finfo(float).min
-
-
-def sparse_agglom_rep(S):
-    # sparse agglomeration of rows of S
-    agglom_rep_col = list(set(S.tocoo().col.tolist()))
-    agglom_rep_row = [0] * len(agglom_rep_col)
-    agglom_rep_data = [1] * len(agglom_rep_col)
-    agglom_rep = csr_matrix(
-        (agglom_rep_data, (agglom_rep_row, agglom_rep_col)),
-        shape=(1, S.shape[1]),
-        dtype=float
-    )
-    return agglom_rep
-
-
-def get_nil_rep(rep_dim=None):
-    assert rep_dim is not None
-    return csr_matrix(
-        ([], ([], [])), shape=(1, rep_dim), dtype=float
-    )
-
-
 def custom_hac(points, sim_func, constraints):
+    # FIXME: sim_func is unused
 
     level_set = points.astype(float)
     Z = []
@@ -325,16 +303,22 @@ def cluster_points(opt,
 
         lc_rr = pred_tree_nodes[lchild].raw_rep
         rc_rr = pred_tree_nodes[rchild].raw_rep
+        lc_tr = pred_tree_nodes[lchild].transformed_rep
+        rc_tr = pred_tree_nodes[rchild].transformed_rep
 
+        agglom_raw_rep = sparse_agglom_rep(sp.vstack((lc_rr, rc_rr)))
         if score > MIN_FLOAT:
-            agglom_raw_rep = sparse_agglom_rep(sp.vstack((lc_rr, rc_rr)))
+            agglom_transformed_rep = sparse_agglom_rep(
+                sp.vstack((lc_tr, rc_tr))
+            )
         else:
-            agglom_raw_rep = get_nil_rep(rep_dim=lc_rr.shape[1])
+            agglom_transformed_rep = get_nil_rep(rep_dim=lc_rr.shape[1])
 
         pred_tree_nodes.append(
             TreeNode(
                 new_node_id,
                 agglom_raw_rep,
+                transformed_rep=agglom_transformed_rep,
                 children=[pred_tree_nodes[lchild], pred_tree_nodes[rchild]]
             )
         )
@@ -352,7 +336,7 @@ def cluster_points(opt,
     )
 
     # the predicted entities canonicalization
-    pred_canon_ents = np.vstack(
+    pred_canon_ents = sp.vstack(
         [n.raw_rep for n in cut_frontier_nodes]
     )
 
