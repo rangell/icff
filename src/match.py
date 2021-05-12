@@ -2,6 +2,9 @@ import copy
 from collections import defaultdict
 from heapq import heappop, heappush
 import numpy as np
+import scipy.sparse as sp
+
+from sparse_dot_mkl import dot_product_mkl
 
 from IPython import embed
 
@@ -42,10 +45,15 @@ def match_constraints(constraints,
                       allow_no_match=False):
 
     # organize constraints nicely
-    Xi = np.vstack(constraints)
+    Xi = sp.vstack(constraints)
 
     # compute incompatibility matrix
-    A = np.triu(np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1), k=1)
+    extreme_constraints = copy.deepcopy(Xi)
+    extreme_constraints.data *= np.inf
+    A = dot_product_mkl(
+        extreme_constraints, extreme_constraints.T, dense=True
+    )
+    A = np.triu((A == -np.inf) | np.isnan(A), k=1)
 
     # find best assignment using branch and bound (pruning) solution
     soln_frontier = []

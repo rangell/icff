@@ -1,10 +1,12 @@
 import numpy as np
 
+from IPython import embed
+
 
 def raw_overlap(node, constraint, num_points):
     rep = node.raw_rep
-    pair_product = rep * constraint
-    if np.all(pair_product >= 0):
+    pair_product = rep.multiply(constraint)
+    if np.all(pair_product.data > 0):
         score = np.sum(pair_product > 0) / np.sum(constraint > 0) 
         return score if score < 1 else num_points * score
     else:
@@ -12,6 +14,8 @@ def raw_overlap(node, constraint, num_points):
 
 
 def transformed_overlap(node, constraint):
+    # FIXME: this won't work
+    assert False
     rep = node.transformed_rep
     pair_product = rep * constraint
     if np.array_equal(rep, np.ones_like(rep) * -np.inf) \

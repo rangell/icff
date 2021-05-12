@@ -129,22 +129,23 @@ def custom_hac(points, sim_func):
     # return the linkage matrix
     Z = np.vstack(Z)
 
-    embed()
-    exit()
-    
     return Z
 
 
 def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
     subcluster_leaves = subcluster.get_leaves()
     assert len(subcluster_leaves) > 0
+
     if opt.cluster_obj_reps == 'raw':
-        reps = np.vstack([n.raw_rep for n in subcluster_leaves])
+        reps = sp.vstack([n.raw_rep for n in subcluster_leaves])
     else:
         assert opt.cluster_obj_reps == 'transformed'
-        reps = np.vstack([n.transformed_rep for n in subcluster_leaves])
-    canon_rep = reduce(lambda a, b : a | b, reps)[None, :]
-    rep_affinities = sim_func(reps, canon_rep)
+        reps = sp.vstack([n.transformed_rep for n in subcluster_leaves])
+
+    canon_rep = sparse_agglom_rep(reps)
+    canon_rep_normd = normalize(canon_rep, norm='l2', axis=1)
+    reps_normd = normalize(reps, norm='l2', axis=1)
+    rep_affinities = dot_product_mkl(reps_normd, canon_rep_normd.T, dense=True)
     return np.sum(rep_affinities) / num_points
 
 
@@ -338,8 +339,13 @@ def get_opt_tree_cut(opt,
 
     incompat_mx = None
     if len(constraints) > 0:
-        Xi = np.vstack(constraints)
-        incompat_mx = np.any((Xi[:, None, :] * Xi[None, :, :]) < 0, axis=-1)
+        Xi = sp.vstack(constraints)
+        extreme_constraints = copy.deepcopy(Xi)
+        extreme_constraints.data *= np.inf
+        incompat_mx = dot_product_mkl(
+            extreme_constraints, extreme_constraints.T, dense=True
+        )
+        incompat_mx = (incompat_mx == -np.inf) | np.isnan(incompat_mx)
 
     # recursively compute value map of root node
     assert pred_tree_nodes[-1].parent is None
@@ -418,6 +424,7 @@ def cluster_points(opt,
         opt,
         pred_tree_nodes,
         sim_func,
+        compat_func,
         constraints,
         cost_per_cluster,
         num_points,
@@ -436,10 +443,7 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
-    fits = np.sum([
-        np.sum(sparse_agglom_rep(sp.vstack((points[a], points[b]))))
-            for _, a, b in constraints
-    ])
+    fits = np.sum([xi.size for xi in constraints])
     hg_tree = hg.Tree(struct_node_list)
     dp = hg.dendrogram_purity(hg_tree, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
@@ -540,12 +544,13 @@ def run_mock_icff(opt,
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
     # NOTE: JUST FOR TESTING
-    constraints = [(2*ent - 1) for ent in gold_entities.toarray()]
+    constraints = [csr_matrix(2*ent - 1, dtype=float)
+                        for ent in gold_entities.toarray()]
     for i, xi in enumerate(constraints):
         first_compat_idx = np.where(mention_labels == i)[0][0]
         first_compat_mention = mentions[first_compat_idx]
         transformed_rep = sparse_agglom_rep(
-            sp.vstack((first_compat_mention, csr_matrix(xi)))
+            sp.vstack((first_compat_mention, xi))
         )
         leaves[i].transformed_rep = transformed_rep
 
@@ -569,24 +574,24 @@ def run_mock_icff(opt,
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        # generate constraints every `iters` round
-        iters = 1
-        if r % iters == 0: 
-            logger.debug('*** START - Generating Constraints ***')
-            # generate constraints and viable places given predictions
-            constraints = gen_constraint(
-                opt,
-                gold_entities,
-                pred_canon_ents,
-                pred_tree_nodes,
-                constraints,
-                sim_func,
-                num_to_generate=opt.num_constraints_per_round
-            )
-            logger.debug('*** END - Generating Constraints ***')
+        ## generate constraints every `iters` round
+        #iters = 1
+        #if r % iters == 0: 
+        #    logger.debug('*** START - Generating Constraints ***')
+        #    # generate constraints and viable places given predictions
+        #    constraints = gen_constraint(
+        #        opt,
+        #        gold_entities,
+        #        pred_canon_ents,
+        #        pred_tree_nodes,
+        #        constraints,
+        #        sim_func,
+        #        num_to_generate=opt.num_constraints_per_round
+        #    )
+        #    logger.debug('*** END - Generating Constraints ***')
 
-            ## NOTE: JUST FOR TESTING
-            #constraints = [(2*ent - 1) for ent in gold_entities]
+        #    ## NOTE: JUST FOR TESTING
+        #    #constraints = [(2*ent - 1) for ent in gold_entities]
 
         logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
