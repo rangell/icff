@@ -629,11 +629,13 @@ def run_mock_icff(opt,
         # project resolved constraint placements to leaves
         for xi, rp in zip(constraints, resolved_placements):
             for node in rp.get_leaves():
-                node.transformed_rep |= xi
+                node.transformed_rep = sparse_agglom_rep(
+                    sp.vstack((node.transformed_rep, xi))
+                )
         logger.debug('*** END - Projecting Assigned Constraints ***')
 
-    embed()
-    exit()
+        embed()
+        exit()
 
 
 
