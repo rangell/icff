@@ -168,6 +168,7 @@ def constraint_satisfaction(opt,
 
     constraints_satisfied = {}
     for i, xi in enumerate(constraints):
+        assert False
         compat_score = compat_func(
             node, xi, num_points if opt.super_compat_score else 1
         )
@@ -671,8 +672,18 @@ def run_mock_icff(opt,
 
         logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
+
+
+        # FIXME: FOR TESTING!!!
+        pred_tree_raw_reps = sp.vstack([n.raw_rep for n in pred_tree_nodes])
+        overlap_scores = compat_func(pred_tree_raw_reps, sp.vstack(constraints), 1)
+
+        embed()
+        exit()
+
+
         viable_placements = []
-        for xi in constraints:
+        for xi in tqdm(constraints):
             compatible_nodes = constraint_compatible_nodes(
                 opt, pred_tree_nodes, xi, compat_func, num_points
             )
