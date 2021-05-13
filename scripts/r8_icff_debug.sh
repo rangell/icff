@@ -11,5 +11,9 @@ python src/icff.py\
     --max_rounds=10\
     --num_constraints_per_round=1000\
     --sim_func='cosine'\
+    --compat_func='raw'\
+    --constraint_strength=50\
     --cluster_obj_reps='raw'\
+    --compat_agg='sum'\
+    --super_compat_score\
     --debug

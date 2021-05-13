@@ -134,7 +134,7 @@ def sparse_agglom_rep(S):
         coord_map[(0, c)].add(d)  # row is always 0
         
     if any([d == set([-1, 1]) for d in coord_map.values()]):
-        raise InvalidAgglomError
+        raise InvalidAgglomError()
 
     agglom_row, agglom_col, agglom_data = zip(*[
         (r, c, list(d)[0]) for (r, c), d in coord_map.items()

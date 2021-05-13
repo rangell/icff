@@ -13,7 +13,8 @@ from tqdm import tqdm, trange
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse import csr_matrix, coo_matrix
-from scipy.cluster.hierarchy import fcluster
+from scipy.special import softmax
+
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
 from sklearn.preprocessing import normalize
@@ -50,7 +51,8 @@ def custom_hac(points, sim_func):
     num_leaves = np.ones_like(uids)
     Z = []
 
-    level_set_normd = normalize(level_set, norm='l2', axis=1)
+    #level_set_normd = normalize(level_set, norm='l2', axis=1)
+    level_set_normd = normalize(level_set > 0, norm='l2', axis=1)
     sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
 
     for _ in trange(level_set.shape[0]-1):
@@ -104,7 +106,8 @@ def custom_hac(points, sim_func):
         sim_mx = np.concatenate(
             (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
         )
-        agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
+        #agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
+        agglom_rep_normd = normalize(agglom_rep > 0, norm='l2', axis=1)
         level_set_normd = sp.vstack(
             (level_set_normd[not_agglom_mask], agglom_rep_normd)
         )
@@ -142,7 +145,14 @@ def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
         assert opt.cluster_obj_reps == 'transformed'
         reps = sp.vstack([n.transformed_rep for n in subcluster_leaves])
 
-    canon_rep = sparse_agglom_rep(reps)
+    try:
+        canon_rep = sparse_agglom_rep(reps)
+    except InvalidAgglomError:
+        if opt.cluster_obj_reps == 'transformed':
+            canon_rep = get_nil_rep(rep_dim=reps.shape[1])
+        else:
+            raise InvalidAgglomError()
+
     canon_rep_normd = normalize(canon_rep, norm='l2', axis=1)
     reps_normd = normalize(reps, norm='l2', axis=1)
     rep_affinities = dot_product_mkl(reps_normd, canon_rep_normd.T, dense=True)
@@ -465,69 +475,127 @@ def gen_constraint(opt,
                    gold_entities,
                    pred_canon_ents,
                    pred_tree_nodes,
+                   feat_freq,
                    constraints,
                    sim_func,
                    num_to_generate=1):
 
-    for _ in range(num_to_generate):
+    totals = np.sum(feat_freq, axis=0)
+    feat_freq_normd = feat_freq / totals
+
+    for _ in trange(num_to_generate):
         # oracle feedback generation in the form of there-exists constraints
-        pred_ent_idx = random.randint(0, len(pred_canon_ents)-1)
+        pred_ent_idx = random.randint(0, pred_canon_ents.shape[0]-1)
         ff_pred_ent = pred_canon_ents[pred_ent_idx]
-        feat_intersect = ff_pred_ent & gold_entities
-        feat_subset = feat_intersect == ff_pred_ent
-        is_ent_subsets = np.all(feat_subset, axis=1)
+        feat_intersect = dot_product_mkl(
+            ff_pred_ent.multiply(gold_entities), ff_pred_ent.T, dense=True
+        ).reshape(-1,)
+        is_ent_subsets = feat_intersect == np.sum(ff_pred_ent)
         num_ent_subsets = np.sum(is_ent_subsets)
         assert num_ent_subsets < 2
-        if num_ent_subsets == 0:
-            logger.debug('****** SPLIT CONSTRAINT ******')
-            # split required
-            tgt_ent_idx = np.argmax(np.sum(feat_intersect, axis=1))
-        else:
-            logger.debug('****** MERGE CONSTRAINT ******')
-            assert num_ent_subsets == 1
-            # merge required
-            tgt_ent_idx = np.argmax(is_ent_subsets)
 
+        # get the tgt entity for this constraint
+        tgt_ent_idx = np.argmax(feat_intersect)
         tgt_gold_ent = gold_entities[tgt_ent_idx]
 
         while True:
-            # init constraint
-            ff_constraint = np.zeros_like(tgt_gold_ent)
+
+            # indices of features in predicted ent domain
+            ff_pred_ent_domain = ff_pred_ent.tocoo().col
+
+            # sample "pos"-features
+            pos_pred_domain = np.array(
+                list(
+                    set(tgt_gold_ent.tocoo().col).difference(
+                        set(ff_pred_ent_domain)
+                    )
+                )
+            )
+            pos_idxs = np.array([])
+            if pos_pred_domain.size > 0:
+                pos_feat_dist = softmax(
+                    feat_freq_normd[tgt_ent_idx, pos_pred_domain]
+                )
+                pos_idxs = np.random.choice(
+                    pos_pred_domain,
+                    size=min(opt.constraint_strength, pos_pred_domain.size),
+                    replace=False,
+                    p=pos_feat_dist
+                )
 
             # sample "in"-features
-            in_pred_domain = np.where(ff_pred_ent == 1)[0]
-            np.random.shuffle(in_pred_domain)
-            in_idxs = in_pred_domain[:opt.constraint_strength]
-
-            # select 2nd closest gold entity
-            arg_feat_overlap = np.argsort(np.sum(feat_intersect, axis=1))
-            assert arg_feat_overlap[-1] == tgt_ent_idx
-            neg_tgt_idx = arg_feat_overlap[-2]
-            neg_tgt_ent = gold_entities[neg_tgt_idx]
-
-            # sample "out"-features
-            out_pos_feats = (tgt_gold_ent ^ ff_pred_ent) & (1-neg_tgt_ent)
-            out_pred_domain = np.where(out_pos_feats)[0]
-            np.random.shuffle(out_pred_domain)
-            out_idxs = out_pred_domain[:opt.constraint_strength]
+            in_pred_domain = ff_pred_ent.multiply(tgt_gold_ent).tocoo().col
+            in_feat_dist = softmax(
+                feat_freq_normd[tgt_ent_idx][in_pred_domain]
+            )
+            in_idxs = np.random.choice(
+                in_pred_domain,
+                size=min(2*opt.constraint_strength - pos_idxs.size,
+                         in_pred_domain.size),
+                replace=False,
+                p=in_feat_dist
+            )
 
             # sample "neg"-features
-            out_neg_feats = neg_tgt_ent & (1 - tgt_gold_ent)
-            out_neg_domain = np.where(out_neg_feats)[0]
-            np.random.shuffle(out_neg_domain)
-            neg_idxs = out_neg_domain[:opt.constraint_strength]
+            if num_ent_subsets == 0:
+                neg_pred_domain = np.array(
+                    list(
+                        set(ff_pred_ent_domain).difference(
+                            set(in_pred_domain)
+                        )
+                    )
+                )
+                neg_feat_dist = softmax(
+                    np.sum(feat_freq[:, neg_pred_domain], axis=0)
+                )
+            else:
+                not_gold_mask = ~tgt_gold_ent.toarray().reshape(-1,).astype(bool)
+                neg_pred_domain = np.where(not_gold_mask)[0]
+                corr_weights = np.sum(
+                    feat_freq_normd[:, in_pred_domain], axis=1
+                )
+                neg_feat_dist = softmax(np.sum(
+                  feat_freq_normd[:, not_gold_mask] * corr_weights.reshape(-1, 1),
+                  axis=0
+                )) 
+            neg_idxs = np.random.choice(
+                neg_pred_domain,
+                size=min(opt.constraint_strength, neg_pred_domain.size),
+                replace=False,
+                p=neg_feat_dist
+            )
 
-            # fill in constraint
-            ff_constraint[in_idxs] = 1
-            ff_constraint[out_idxs] = 1
-            ff_constraint[neg_idxs] = -1
+            # create constraint
+            ff_constraint_cols = np.concatenate((pos_idxs, in_idxs, neg_idxs), axis=0)
+            ff_constraint_data = [1] * (pos_idxs.size + in_idxs.size)\
+                                 + [-1] * neg_idxs.size
+            ff_constraint_rows = np.zeros_like(ff_constraint_cols)
+            ff_constraint = csr_matrix(
+               (ff_constraint_data, (ff_constraint_rows, ff_constraint_cols)),
+               shape=tgt_gold_ent.shape,
+               dtype=float
+            )
 
-            if not any([np.array_equal(ff_constraint, xi) for xi in constraints]):
+            # check to make sure this constraint doesn't exist yet
+            already_exists = np.any([
+                (ff_constraint != xi).nnz == 0 for xi in constraints
+            ])
+
+            if not already_exists:
                 break
 
+        # add constraint to running list
         constraints.append(ff_constraint)
 
     return constraints
+
+
+def get_feat_freq(mentions, mention_labels):
+    counts_rows = []
+    for lbl_id in np.unique(mention_labels):
+        counts_rows.append(np.sum(mentions[mention_labels == lbl_id], axis=0))
+    counts = np.asarray(np.concatenate(counts_rows))
+    return counts
 
 
 def run_mock_icff(opt,
@@ -537,22 +605,23 @@ def run_mock_icff(opt,
                   sim_func,
                   compat_func):
 
-    num_points = mentions.shape[0]
     constraints = []
+    num_points = mentions.shape[0]
+    feat_freq = get_feat_freq(mentions, mention_labels)
 
     # construct tree node objects for leaves
     leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
-    # NOTE: JUST FOR TESTING
-    constraints = [csr_matrix(2*ent - 1, dtype=float)
-                        for ent in gold_entities.toarray()]
-    for i, xi in enumerate(constraints):
-        first_compat_idx = np.where(mention_labels == i)[0][0]
-        first_compat_mention = mentions[first_compat_idx]
-        transformed_rep = sparse_agglom_rep(
-            sp.vstack((first_compat_mention, xi))
-        )
-        leaves[i].transformed_rep = transformed_rep
+    ## NOTE: JUST FOR TESTING
+    #constraints = [csr_matrix(2*ent - 1, dtype=float)
+    #                    for ent in gold_entities.toarray()]
+    #for i, xi in enumerate(constraints):
+    #    first_compat_idx = np.where(mention_labels == i)[0][0]
+    #    first_compat_mention = mentions[first_compat_idx]
+    #    transformed_rep = sparse_agglom_rep(
+    #        sp.vstack((first_compat_mention, xi))
+    #    )
+    #    leaves[i].transformed_rep = transformed_rep
 
     for r in range(opt.max_rounds):
         logger.debug('*** START - Clustering Points ***')
@@ -570,28 +639,35 @@ def run_mock_icff(opt,
         logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
+
+        if r == 3:
+            embed()
+            exit()
+
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        ## generate constraints every `iters` round
-        #iters = 1
-        #if r % iters == 0: 
-        #    logger.debug('*** START - Generating Constraints ***')
-        #    # generate constraints and viable places given predictions
-        #    constraints = gen_constraint(
-        #        opt,
-        #        gold_entities,
-        #        pred_canon_ents,
-        #        pred_tree_nodes,
-        #        constraints,
-        #        sim_func,
-        #        num_to_generate=opt.num_constraints_per_round
-        #    )
-        #    logger.debug('*** END - Generating Constraints ***')
+        # generate constraints every `iters` round
+        iters = 1
+        if r % iters == 0: 
+            logger.debug('*** START - Generating Constraints ***')
+            # generate constraints and viable places given predictions
+            constraints = gen_constraint(
+                opt,
+                gold_entities,
+                pred_canon_ents,
+                pred_tree_nodes,
+                feat_freq,
+                constraints,
+                sim_func,
+                num_to_generate=opt.num_constraints_per_round
+            )
+            logger.debug('*** END - Generating Constraints ***')
 
-        #    ## NOTE: JUST FOR TESTING
-        #    #constraints = [(2*ent - 1) for ent in gold_entities]
+        ## NOTE: JUST FOR TESTING
+        #constraints = [csr_matrix(2*ent - 1, dtype=float)
+        #                    for ent in gold_entities.toarray()]
 
         logger.debug('*** START - Computing Viable Placements ***')
         # update constraints and viable placements
@@ -634,8 +710,8 @@ def run_mock_icff(opt,
                 )
         logger.debug('*** END - Projecting Assigned Constraints ***')
 
-        embed()
-        exit()
+    embed()
+    exit()
 
 
 
