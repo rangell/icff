@@ -166,19 +166,21 @@ def constraint_satisfaction(opt,
                             num_points,
                             num_constraints):
 
-    constraints_satisfied = {}
-    for i, xi in enumerate(constraints):
-        assert False
-        compat_score = compat_func(
-            node, xi, num_points if opt.super_compat_score else 1
-        )
-        if compat_score > 0:
-            if opt.compat_agg == 'sum':
-                constraints_satisfied[i] = compat_score
-            else:
-                assert opt.compat_agg == 'avg'
-                constraints_satisfied[i] = compat_score / num_constraints
-    return constraints_satisfied
+    constraint_satisfied = {}
+    if len(constraints) > 0:
+        constraint_scores = compat_func(
+            node.raw_rep,
+            sp.vstack(constraints),
+            num_points if opt.super_compat_score else 1
+        ).reshape(-1,)
+
+        if opt.compat_agg == 'avg':
+            constraint_scores /= num_constraints
+
+        for idx in np.where(constraint_scores > 0)[0]:
+            constraint_satisfied[idx] = constraint_scores[idx]
+
+    return constraint_satisfied
 
 
 def value_node(opt,
@@ -264,6 +266,8 @@ def memoize_subcluster(opt,
                                          num_constraints)
                         for c in node.children]
         assert len(child_maps) == 2 # restrict to binary trees for now
+
+        logger.debug('At node: {}'.format(node.uid))
 
         # resolve child maps
         resolved_child_map = {}

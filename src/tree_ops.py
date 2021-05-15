@@ -1,6 +1,5 @@
 import numpy as np
 import scipy.sparse as sp
-from heapq import heappop, heappush, heapify
 
 from IPython import embed
 
@@ -13,7 +12,9 @@ def constraint_compatible_nodes(opt,
 
     node_raw_reps = sp.vstack([n.raw_rep for n in nodes])
     overlap_scores = compat_func(
-        node_raw_reps, sp.vstack(constraints), num_points
+        node_raw_reps,
+        sp.vstack(constraints),
+        num_points if opt.super_compat_score else 1
     )
 
     viable_placements = []

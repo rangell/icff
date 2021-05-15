@@ -8,16 +8,16 @@ from IPython import embed
 
 #def raw_overlap(node, constraint, num_points):
 def raw_overlap(raw_reps, stacked_constraints, num_points):
-    extreme_raw_reps = copy.deepcopy(raw_reps)
+    extreme_raw_reps = copy.deepcopy(raw_reps).astype(float)
     extreme_raw_reps *= np.inf
-    extreme_constraints = copy.deepcopy(stacked_constraints)
+    extreme_constraints = copy.deepcopy(stacked_constraints).astype(float)
     extreme_constraints.data *= np.inf
     compat_mx = dot_product_mkl(
         extreme_raw_reps, extreme_constraints.T, dense=True
     )
     compat_mx = ~((compat_mx == -np.inf) | np.isnan(compat_mx))
     pos_overlap_scores = dot_product_mkl(
-        raw_reps, stacked_constraints.T, dense=True
+        raw_reps.astype(float), stacked_constraints.T, dense=True
     )
     pos_overlap_mask = (pos_overlap_scores > 0)
     pos_feat_totals = np.sum(stacked_constraints > 0, axis=1).T
