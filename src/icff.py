@@ -23,6 +23,7 @@ from sparse_dot_mkl import dot_product_mkl
 
 import higra as hg
 
+from assign import greedy_assign
 from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
 from sim_func import dot_prod, jaccard_sim, cos_sim
@@ -675,33 +676,37 @@ def run_mock_icff(opt,
         )
         logger.debug('*** END - Computing Viable Placements ***')
 
-        # CODE OPTIMIZATION STOPS HERE
-        embed()
-        exit()
-
         logger.debug('*** START - Assigning Constraints ***')
         # solve structured prediction problem of jointly placing the constraints
-        placements_out = match_constraints(
+        placements_out = greedy_assign(
+            pred_tree_nodes,
             constraints,
             viable_placements,
-            lca_check,
-            allow_no_match=False    # may change this arg later
         )
-        assert placements_out is not None
-        _, resolved_placements = placements_out
         logger.debug('*** END - Assigning Constraints ***')
 
         logger.debug('*** START - Projecting Assigned Constraints ***')
         # reset all leaf transformed_rep's
+        logger.debug('Reseting leaves')
         for node in leaves:
             node.transformed_rep = copy.deepcopy(node.raw_rep)
 
+        # transform the placements out to leaf2constraints
+        logger.debug('Expanding placements to leaves')
+        nuid2luids = {n.uid : [x.uid for x in n.get_leaves()]
+                         for n in pred_tree_nodes}
+        leaf2constraints = defaultdict(set)
+        for nuid, cuids in placements_out.items():
+            for luid in nuid2luids[nuid]:
+                leaf2constraints[luid].update(cuids)
+
         # project resolved constraint placements to leaves
-        for xi, rp in zip(constraints, resolved_placements):
-            for node in rp.get_leaves():
-                node.transformed_rep = sparse_agglom_rep(
-                    sp.vstack((node.transformed_rep, xi))
-                )
+        logger.debug('Projecting constraints to expanded placements')
+        for nuid, cuids in leaf2constraints.items():
+            reps = [pred_tree_nodes[nuid].transformed_rep]\
+                    + [constraints[cuid] for cuid in cuids]
+            node.transformed_rep = sparse_agglom_rep(sp.vstack(reps))
+
         logger.debug('*** END - Projecting Assigned Constraints ***')
 
     embed()
