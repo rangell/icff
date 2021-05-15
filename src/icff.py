@@ -25,7 +25,6 @@ import higra as hg
 
 from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
-from match import match_constraints, lca_check, viable_match_check
 from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
@@ -454,7 +453,7 @@ def cluster_points(opt,
             pred_labels[x.uid] = i
     
     # compute metrics
-    fits = np.sum([xi.size for xi in constraints])
+    fits = int(np.sum([xi.size for xi in constraints]))
     hg_tree = hg.Tree(struct_node_list)
     dp = hg.dendrogram_purity(hg_tree, labels)
     adj_rand_idx = adj_rand(pred_labels, labels)
@@ -671,30 +670,14 @@ def run_mock_icff(opt,
         #                    for ent in gold_entities.toarray()]
 
         logger.debug('*** START - Computing Viable Placements ***')
-        # update constraints and viable placements
+        viable_placements = constraint_compatible_nodes(
+            opt, pred_tree_nodes, constraints, compat_func, num_points
+        )
+        logger.debug('*** END - Computing Viable Placements ***')
 
-
-        # FIXME: FOR TESTING!!!
-        pred_tree_raw_reps = sp.vstack([n.raw_rep for n in pred_tree_nodes])
-        overlap_scores = compat_func(pred_tree_raw_reps, sp.vstack(constraints), 1)
-
+        # CODE OPTIMIZATION STOPS HERE
         embed()
         exit()
-
-
-        viable_placements = []
-        for xi in tqdm(constraints):
-            compatible_nodes = constraint_compatible_nodes(
-                opt, pred_tree_nodes, xi, compat_func, num_points
-            )
-            viable_placements.append(
-                sorted(
-                    compatible_nodes,
-                    key=lambda x: (x[0], x[1].uid),
-                    reverse=True
-                )
-            )
-        logger.debug('*** END - Computing Viable Placements ***')
 
         logger.debug('*** START - Assigning Constraints ***')
         # solve structured prediction problem of jointly placing the constraints

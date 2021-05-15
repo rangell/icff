@@ -41,7 +41,7 @@ def uniqheappop(heap, inheap):
 
 def match_constraints(constraints,
                       viable_assigns,
-                      compat_fn,
+                      lca_incompat_mx,
                       allow_no_match=False):
 
     # organize constraints nicely
@@ -64,7 +64,15 @@ def match_constraints(constraints,
         Frontier(np.inf, [0] * len(viable_assigns))
     )
     compatible = False
+
+    round_iter = 0
+
     while len(soln_frontier) > 0:
+
+        round_iter += 1
+        print('iter: {}, in_frontier_size: {}'.format(round_iter, len(in_frontier)))
+        assert len(soln_frontier) == len(in_frontier)
+
         indices = uniqheappop(soln_frontier, in_frontier).indices
 
         invalid_prop = False
@@ -82,16 +90,11 @@ def match_constraints(constraints,
         if invalid_prop:
             continue
 
-        # check if any incompatible pairs of constraints violate `compat_fn`
+        # check if any incompatible pairs of constraints violate lca incompatibility
         compat_check_iter = zip(*np.where(A > 0))
         incompat_pairs = []
         for i, j in compat_check_iter:
-            compatible = compat_fn(
-                constraints[i],
-                prop_assigns[i][1],
-                constraints[j],
-                prop_assigns[j][1]
-            )
+            compatible = not lca_incompat_mx[prop_assigns[i][1]][prop_assigns[j][1]]
             if not compatible:
                 incompat_pairs.append((i, j))
         
@@ -117,12 +120,7 @@ def match_constraints(constraints,
                 compatible = False
                 _iter = enumerate(viable_assigns[j][indices[j]+1:])
                 for offset, hypo_assign in _iter:
-                    compatible = compat_fn(
-                        constraints[i],
-                        prop_assigns[i][1],
-                        constraints[j],
-                        hypo_assign[1]
-                    )
+                    compatible = not lca_incompat_mx[prop_assigns[i][1]][hypo_assign[1]]
                     if compatible:
                         new_frontier_indices[j] = indices[j] + 1 + offset
                         keep_ub_affinity += hypo_assign[0]
@@ -177,34 +175,3 @@ def match_constraints(constraints,
     else:
         return None
     return scores, assigns
-
-
-def lca_check(constraint1, node1, constraint2, node2):
-    """ Checks to see if lca(node1, node2) is not in {node1, node2}. """
-    if node1 is None or node2 is None:
-        return True
-
-    nodes = sorted(
-        [(node1.uid, node1), (node2.uid, node2)],
-        key=lambda x: -x[0]
-    )
-    max_uid = nodes[0][0]
-
-    while nodes[1][0] < max_uid:
-        lower_node = nodes[1][1]
-        par = lower_node.parent
-        assert par is not None
-        if par.uid == max_uid:
-            return False
-        nodes[1] = (par.uid, par)
-        nodes = sorted(nodes, key=lambda x: -x[0])
-        
-    return True
-
-
-def viable_match_check(constraint1, node1, constraint2, node2):
-    if node1 is None or node2 is None:
-        return True
-    if node1 == node2 and np.any((constraint1 * constraint2) < 0):
-        return False
-    return True

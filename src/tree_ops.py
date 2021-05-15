@@ -1,21 +1,34 @@
 import numpy as np
+import scipy.sparse as sp
+from heapq import heappop, heappush, heapify
 
 from IPython import embed
 
 
 def constraint_compatible_nodes(opt,
                                 nodes,
-                                ff_constraint,
+                                constraints,
                                 compat_func,
                                 num_points):
-    compatible_nodes = []
-    for node in nodes:
-        compat_score = compat_func(
-            node, ff_constraint, num_points if opt.super_compat_score else 1
+
+    node_raw_reps = sp.vstack([n.raw_rep for n in nodes])
+    overlap_scores = compat_func(
+        node_raw_reps, sp.vstack(constraints), num_points
+    )
+
+    viable_placements = []
+    for scores in overlap_scores.T:
+        node_indices = np.where(scores > 0)[0]
+        compatible_nodes = [(scores[i], nodes[i]) for i in node_indices]
+        viable_placements.append(
+            sorted(
+                compatible_nodes,
+                key=lambda x: (x[0], x[1].uid),
+                reverse=True
+            )
         )
-        if compat_score > 0:
-            compatible_nodes.append((compat_score, node))
-    return compatible_nodes
+
+    return viable_placements
 
 
 def lca(node1, node2):

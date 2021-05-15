@@ -25,7 +25,7 @@ def raw_overlap(raw_reps, stacked_constraints, num_points):
     overlap_scores = pos_overlap_scores / pos_feat_totals
     overlap_scores[overlap_scores == 1] = num_points
     overlap_scores[~compat_mx] = -np.inf
-    return overlap_scores
+    return np.asarray(overlap_scores)
 
 
 def transformed_overlap(node, constraint):
