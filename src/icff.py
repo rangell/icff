@@ -166,21 +166,23 @@ def constraint_satisfaction(opt,
                             num_points,
                             num_constraints):
 
-    constraint_satisfied = {}
     if len(constraints) > 0:
         constraint_scores = compat_func(
             node.raw_rep,
             sp.vstack(constraints),
             num_points if opt.super_compat_score else 1
-        ).reshape(-1,)
+        )
 
         if opt.compat_agg == 'avg':
             constraint_scores /= num_constraints
 
-        for idx in np.where(constraint_scores > 0)[0]:
-            constraint_satisfied[idx] = constraint_scores[idx]
+        # note: we only care about constraint_scores > 0
+        constraint_scores[constraint_scores < 0] = 0
+        constraint_scores = csr_matrix(constraint_scores)
+    else:
+        constraint_scores = get_nil_rep(rep_dim=len(constraints))
 
-    return constraint_satisfied
+    return constraint_scores
 
 
 def value_node(opt,
@@ -196,40 +198,24 @@ def value_node(opt,
     # compute raw materials
     intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
     intra_energy -= cost_per_cluster
-    satisfy_energies = constraint_satisfaction(
+    constraint_scores = constraint_satisfaction(
         opt, node, compat_func, constraints, num_points, num_constraints
     )
+    if incompat_mx is not None:
+        compatibility_mx = (~incompat_mx).astype(float)
+        agg_constraint_score = np.mean(
+            dot_product_mkl(constraint_scores, compatibility_mx)
+        )
+    else:
+        # case: when there are no constraints
+        compatibility_mx = None
+        agg_constraint_score = 0.0
 
-    # fill the value map
-    value_map = {tuple() : (intra_energy, [node], {})}
-    if len(satisfy_energies) > 0:
-        # resolve max subsets of compatible constraints
-        cnstrt_idxs = list(satisfy_energies.keys())
-        sub_incompat_mx = incompat_mx[np.ix_(cnstrt_idxs, cnstrt_idxs)]
-        if np.any(sub_incompat_mx): # hard case: not every valid constraint is compatible
-            # get masks of all valid maximal subsets from cnstrt_idxs
-            max_ss_idxs = ~np.unique(
-                sub_incompat_mx[np.any(sub_incompat_mx, axis=0)], axis=0
-            )
-            for ss in max_ss_idxs:
-                ss_cnstrt_idxs = np.asarray(cnstrt_idxs)[np.where(ss)[0]]
-                ss_cnstrt_energy = sum(
-                    [satisfy_energies[k] for k in ss_cnstrt_idxs]
-                )
-                value_map[tuple(ss_cnstrt_idxs)] = (
-                    intra_energy + ss_cnstrt_energy,
-                    [node],
-                    {k : satisfy_energies[k] for k in ss_cnstrt_idxs}
-                )
-        else: # easy case: every valid constraint is compatible
-            agg_energy = sum(satisfy_energies.values())
-            value_map[tuple(sorted(satisfy_energies.keys()))] = (
-                intra_energy + agg_energy,
-                [node],
-                satisfy_energies
-            )
-
-    return value_map
+    return (intra_energy,
+            agg_constraint_score, 
+            [node],
+            constraint_scores,
+            compatibility_mx)
 
 
 def memoize_subcluster(opt,
@@ -267,78 +253,49 @@ def memoize_subcluster(opt,
                         for c in node.children]
         assert len(child_maps) == 2 # restrict to binary trees for now
 
-        logger.debug('At node: {}'.format(node.uid))
+        #print('At node: {}'.format(node.uid))
 
         # resolve child maps
-        resolved_child_map = {}
-        for l_key, r_key in product(*[list(m.keys()) for m in child_maps]):
-            constraint_key = tuple(sorted(list(set(list(l_key)+list(r_key)))))
-            if len(constraint_key) == len(l_key) + len(r_key):
-                # non-overlap case
-                max_val, _, _ = resolved_child_map.get(
-                    constraint_key, (-np.inf, None, None)
-                )
-                l_val, l_cut, l_cnstrt = child_maps[0][l_key]
-                r_val, r_cut, r_cnstrt = child_maps[1][r_key]
-                this_val = l_val + r_val
-                if this_val >= max_val:
-                    resolved_child_map[constraint_key] = (
-                        this_val,
-                        l_cut + r_cut,
-                        l_cnstrt | r_cnstrt
-                    )
-            else:
-                # overlap case
-                l_val, l_cut, l_cnstrt = child_maps[0][l_key]
-                r_val, r_cut, r_cnstrt = child_maps[1][r_key]
-                bare_val = (l_val - sum(l_cnstrt.values())
-                            + r_val - sum(r_cnstrt.values()))
-                # resolve overlap
-                merged_cnstrt = {
-                    k : max(i for i in (l_cnstrt.get(k), r_cnstrt.get(k)) if i)
-                        for k in l_cnstrt.keys() | r_cnstrt.keys()
-                }
-
-                max_val, _, _ = resolved_child_map.get(
-                    constraint_key, (-np.inf, None, None)
-                )
-                this_val = bare_val + sum(merged_cnstrt.values())
-                if this_val >= max_val:
-                    resolved_child_map[constraint_key] = (
-                        this_val,
-                        l_cut + r_cut,
-                        merged_cnstrt
-                    )
-
-        # return map of max over merged keys of dicts
-        for key, cut_rep in resolved_child_map.items():
-            if key in node_map.keys():
-                if cut_rep[0] > node_map[key][0]:
-                    node_map[key] = resolved_child_map[key]
-            else:
-                node_map[key] = resolved_child_map[key]
-
-    # check supersets
-    node_map_keys = sorted(node_map.keys(), key=lambda k : len(k))
-    for supset_key in node_map_keys:
-        for subset_key in node_map_keys:
-            if len(subset_key) >= len(supset_key):
-                break
-            if subset_key not in node_map.keys(): # we're deleting some of the keys
-                continue
-
-            # check to see whether or not we should delete subset_key
-            supset_val, supset_cut, supset_cnstrt = node_map[supset_key]
-            subset_val, subset_cut, subset_cnstrt = node_map[subset_key]
-            supset_cmp_val = supset_val - sum(
-                [v for k, v in supset_cnstrt.items() 
-                    if k not in subset_cnstrt.keys()]
+        resolved_raw_score = np.sum([m[0] for m in child_maps])
+            
+        if len(constraints) > 0:
+            stacked_constraint_scores = sp.vstack(
+                (child_maps[0][3], child_maps[1][3])
             )
-            if supset_cmp_val < subset_val:
-                continue
-            else:
-                # don't need subset key anymore
-                del node_map[subset_key]
+            resolved_constraint_scores = np.max(
+                stacked_constraint_scores, axis=0
+            ).tocsr()
+            right_mask = np.argmax(stacked_constraint_scores, axis=0).astype(bool)
+            left_mask = ~right_mask
+
+            right_compat_mask = (right_mask.T & right_mask).astype(float)
+            left_compat_mask = (left_mask.T & left_mask).astype(float)
+
+            left_incompat_mx = csr_matrix(1 - child_maps[0][4])
+            right_incompat_mx = csr_matrix(1 - child_maps[1][4])
+            
+            resolved_compatibility_mx = 1 - (
+                left_incompat_mx.multiply(left_compat_mask)
+                + right_incompat_mx.multiply(right_compat_mask)
+            ).toarray()
+            resolved_agg_constraint_score = np.mean(
+                dot_product_mkl(
+                    resolved_constraint_scores, resolved_compatibility_mx
+                )
+            )
+        else:
+            resolved_agg_constraint_score = 0
+            resolved_constraint_scores = get_nil_rep(rep_dim=len(constraints))
+            resolved_compatibility_mx = None
+
+        child_score = resolved_raw_score + resolved_agg_constraint_score
+        if child_score > (node_map[0] + node_map[1]):
+            resolved_cut_nodes = child_maps[0][2] + child_maps[1][2]
+            node_map= (resolved_raw_score,
+                       resolved_agg_constraint_score, 
+                       resolved_cut_nodes,
+                       resolved_constraint_scores,
+                       resolved_compatibility_mx)
 
     return node_map
         
@@ -364,6 +321,7 @@ def get_opt_tree_cut(opt,
 
     # recursively compute value map of root node
     assert pred_tree_nodes[-1].parent is None
+
     root_value_map = memoize_subcluster(
         opt,
         pred_tree_nodes[-1],
@@ -376,11 +334,8 @@ def get_opt_tree_cut(opt,
         num_constraints
     )
 
-    # pick max cut out of `root_value_map` (maximizing energy)
-    max_cut_keys = [k for k in root_value_map.keys() 
-                        if len(k) == len(constraints)]
-    assert len(max_cut_keys) == 1
-    max_cut_score, max_cut, _ = root_value_map[max_cut_keys[0]]
+    max_cut_score = root_value_map[0] + root_value_map[1]
+    max_cut = root_value_map[2]
 
     return max_cut, max_cut_score
 
@@ -401,6 +356,7 @@ def cluster_points(opt,
     Z = custom_hac(points, sim_func)
 
     # build the tree
+    logger.debug('Constructing the tree')
     pred_tree_nodes = copy.copy(leaf_nodes) # shallow copy on purpose!
     new_node_id = num_points
     struct_node_list = np.arange(2*num_points - 1) # used for higra's dp
@@ -435,6 +391,7 @@ def cluster_points(opt,
         new_node_id += 1
 
     # find the best cut
+    logger.debug('Cutting the tree')
     cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
         opt,
         pred_tree_nodes,
