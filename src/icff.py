@@ -725,6 +725,10 @@ def run_mock_icff(opt,
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
 
+        if r == 1:
+            embed()
+            exit()
+
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
@@ -789,13 +793,7 @@ def run_mock_icff(opt,
                 sp.vstack(reps)
             )
 
-            embed()
-            exit()
-
         logger.debug('*** END - Projecting Assigned Constraints ***')
-
-        embed()
-        exit()
 
     embed()
     exit()
