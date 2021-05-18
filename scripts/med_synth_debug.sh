@@ -17,7 +17,7 @@ python src/icff.py\
     --sim_func='cosine'\
     --compat_func='raw'\
     --cluster_obj_reps='raw'\
-    --compat_agg='avg'\
+    --compat_agg='sum'\
     --constraint_strength=5\
     --super_compat_score\
     --debug

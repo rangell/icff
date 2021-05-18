@@ -9,11 +9,11 @@ python src/icff.py\
     --data_file="r8-test-stemmed.dataset.pkl"\
     --cost_per_cluster=1e-3\
     --max_rounds=10\
-    --num_constraints_per_round=100\
+    --num_constraints_per_round=1000\
     --sim_func='cosine'\
     --compat_func='raw'\
-    --constraint_strength=50\
+    --constraint_strength=3\
     --cluster_obj_reps='raw'\
-    --compat_agg='avg'\
+    --compat_agg='sum'\
     --super_compat_score\
     --debug
