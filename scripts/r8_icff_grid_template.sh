@@ -15,10 +15,6 @@
 eval "$(conda shell.bash hook)"
 conda activate icff
 
-echo 'Hello World'
-
-sleep 200
-exit
 
 export MKL_NUM_THREADS=56
 export OPENBLAS_NUM_THREADS=56
