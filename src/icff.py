@@ -5,7 +5,7 @@ import pickle
 import random
 import logging
 import argparse
-from collections import defaultdict
+from collections import deque, defaultdict
 from heapq import heappop, heappush, heapify
 from functools import reduce
 from itertools import product
@@ -43,15 +43,61 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-def greedy_level_set_assign():
-    pass
+def greedy_level_set_assign(viable_placements, incompat_mx):
+    # Setup:
+    # - queue for every constraint (based on sorted list of viable placements)
+    # - heap of proposed assignments for unassigned constraints
+    # - list(?) of chosen constraints and assignments
+    num_constraints = len(viable_placements)
+
+    running_vp = copy.deepcopy(viable_placements)
+
+    # note this is a min-heap so we negate the score
+    to_pick_heap = [(i, *d.popleft()) for i, d in enumerate(running_vp)]
+    to_pick_heap = [(-s, (c, t)) for c, s, t in to_pick_heap]
+    heapify(to_pick_heap)
+
+    picked_cidxs = np.array([], dtype=int)
+    picked_nidxs = np.array([], dtype=int)
+    picked_scores = np.array([], dtype=int)
+
+    valid_soln = True
+    while len(picked_cidxs) < num_constraints:
+        s, (c, n) = heappop(to_pick_heap)
+
+        if len(picked_cidxs) == 0:
+            picked_cidxs = np.append(picked_cidxs, int(c))
+            picked_nidxs = np.append(picked_nidxs, int(n))
+            picked_scores = np.append(picked_scores, -int(s))
+            continue
+
+        c_incompat_mask = incompat_mx[c, picked_cidxs]
+        if np.any(picked_nidxs[c_incompat_mask] == n) :
+
+            logger.debug('Inside failed constraint check')
+            embed()
+            exit()
+
+            # if incompatible do the following
+            try:
+                _s, _n = running_vp[c].popleft()
+            except:
+                valid_soln = False
+                break
+            c_next_best = (-_s, (c, _n))
+            heappush(to_pick_heap, c_next_best)
+        else:
+            picked_cidxs = np.append(picked_cidxs, int(c))
+            picked_nidxs = np.append(picked_nidxs, int(n))
+            picked_scores = np.append(picked_scores, -int(s))
+
+    return np.sum(picked_scores), valid_soln
+
 
 
 def assign_constraint_level_set(scores, sum_to_one, sum_lt_one, hints):
 
     num_vars = len(scores)
-
-    time0 = time.time()
 
     ### Model
     model = cp_model.CpModel()
@@ -78,8 +124,6 @@ def assign_constraint_level_set(scores, sum_to_one, sum_lt_one, hints):
         objective_terms.append(scores[i] * x[i])
     model.Maximize(sum(objective_terms))
 
-    time1 = time.time()
-
     ### Solve
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 56
@@ -87,13 +131,6 @@ def assign_constraint_level_set(scores, sum_to_one, sum_lt_one, hints):
     valid_soln = status == cp_model.OPTIMAL or status == cp_model.FEASIBLE
 
     soln = [solver.BooleanValue(x[i]) for i in range(num_vars)]
-
-    time2 = time.time()
-
-    profile_dict = {
-        'ortools_setup_time': time1 - time0,
-        'ortools_solving_time': time2 - time1,
-    }
 
     return valid_soln, solver.ObjectiveValue(), soln, profile_dict
 
@@ -127,11 +164,11 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
     level_set_normd = normalize((level_set > 0).astype(int), norm='l2', axis=1)
     sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
 
-    total_scoring_time = 0.0
-    total_setup_time = 0.0
-    total_solving_time = 0.0
-    ortools_setup_time = 0.0
-    ortools_solving_time = 0.0
+    total_time_zone0 = 0
+    total_time_zone1 = 0
+    total_time_zone2 = 0
+    total_time_zone3 = 0
+    failed_aggloms = 0
 
     invalid_cut = False
     for _ in trange(level_set.shape[0]-1):
@@ -150,6 +187,7 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
                 try:
                     agglom_rep = sparse_agglom_rep(level_set[agglom_mask])
                 except InvalidAgglomError:
+                    failed_aggloms += 1
                     sim_mx[agglom_coord] = MIN_FLOAT
                     continue
             else:
@@ -158,12 +196,16 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
             
         assert np.sum(agglom_mask) == 2
 
+        time0 = time.time()
+
         # update data structures
         linkage_score = sim_mx[agglom_coord]
         not_agglom_mask = ~agglom_mask
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
 
         invalid_cut = invalid_cut or (linkage_score <= MIN_FLOAT)
+
+        time1 = time.time()
 
         # update linkage matrix
         Z.append(
@@ -180,6 +222,8 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
             (level_set[not_agglom_mask], agglom_rep)
         )
 
+        time2 = time.time()
+
         # update sim_mx
         num_untouched = np.sum(not_agglom_mask)
         sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
@@ -187,6 +231,9 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
         sim_mx = np.concatenate(
             (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
         )
+
+        time3 = time.time()
+
         #agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
         agglom_rep_normd = normalize(
             (agglom_rep > 0).astype(int), norm='l2', axis=1
@@ -198,6 +245,8 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
             level_set_normd, agglom_rep_normd.T, dense=True
         )
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
+
+        time4 = time.time()
 
         # update cluster_ids
         next_uid = np.max(uids) + 1
@@ -229,15 +278,10 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
              np.array([agglom_energy]))
         )
 
+
         # compute best assignment of constraints to level_set
         assign_score = 0
         if num_constraints > 0:
-
-            time0 = time.time()
-            # multiplicative constant since solver takes ints only
-            precision_factor = 10000
-
-            # TODO: see if we can make this faster with incremental updates avoiding recomputation each step
             new_constraint_scores = compat_func(
                 (level_set[-1] > 0).astype(int),
                 Xi,
@@ -248,63 +292,30 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
                 axis=0
             )
 
-            time1 = time.time()
-
             node_idxs, constraint_idxs = np.where(constraint_scores > 0)
             scores = constraint_scores[(node_idxs, constraint_idxs)]
-            scores = (scores * precision_factor).astype(int)
 
-            uniq_cuids = np.unique(constraint_idxs)
-            if not np.array_equal(uniq_cuids, np.arange(num_constraints)):
+            viable_placements = [
+                sorted([(scores[i], node_idxs[i]) 
+                            for i in np.where(constraint_idxs == cuid)[0]], 
+                        key=lambda x : x[0], reverse=True)
+                    for cuid in range(num_constraints)
+            ]
+            viable_placements = [deque(l) for l in viable_placements
+                                    if len(l) > 0]
+
+            if len(viable_placements) < num_constraints:
                 invalid_cut = True
                 continue
 
-            sum_to_one = []
-            for cuid in uniq_cuids:
-                sum_to_one.append(np.where(constraint_idxs == cuid)[0].tolist())
-
-            sum_lt_one = []
-            for nuid in np.unique(node_idxs):
-                flat_indices = np.where(node_idxs == nuid)[0]
-                valid_cuids = constraint_idxs[flat_indices]
-                sub_incompat_mx = incompat_mx[(valid_cuids, valid_cuids)]
-                if np.sum(sub_incompat_mx) > 0:
-                    # TODO: get this right
-                    print('!!!!!Got here!!!!!')
-                    embed()
-                    exit()
-
-            time2 = time.time()
-
-            hints = {}
-            #if len(prev_solns) > 0:
-            #    hints = {
-            #        i : prev_solns.get((uids[node_idxs[i]], constraint_idxs[i]), None)
-            #        for i in range(len(scores))
-            #    }
-
-            valid_soln, assign_score, bool_assign, profile_dict = assign_constraint_level_set(
-                scores, sum_to_one, sum_lt_one, hints
+            assign_score, valid_soln = greedy_level_set_assign(
+                viable_placements, incompat_mx
             )
-
-            #prev_solns = {
-            #    (uids[n], c): a
-            #    for n, c, a in zip(node_idxs, constraint_idxs, bool_assign)
-            #}
-            
-            time3 = time.time()
-
-            total_scoring_time += time1 - time0
-            total_setup_time += time2 - time0
-            total_solving_time += time3 - time2
-            ortools_setup_time += profile_dict['ortools_setup_time']
-            ortools_solving_time += profile_dict['ortools_solving_time']
 
             if not valid_soln:
                 invalid_cut = True
                 continue
 
-            assign_score /= precision_factor
             if opt.compat_agg == 'avg':
                 assign_score /= num_constraints
 
@@ -313,8 +324,17 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
                   + assign_score
 
         if cut_score >= best_cut_score:
+            #logger.debug((np.sum(intra_cluster_energies), 
+            #              opt.cost_per_cluster * intra_cluster_energies.size,
+            #              assign_score))
             best_cut_score = cut_score
             best_cut = copy.deepcopy(uids)
+
+
+        total_time_zone0 += time1 - time0
+        total_time_zone1 += time2 - time1
+        total_time_zone2 += time3 - time2
+        total_time_zone3 += time4 - time3
 
     # sanity check
     assert level_set.shape[0] == 1
@@ -322,11 +342,11 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
     # return the linkage matrix
     Z = np.vstack(Z)
 
-    logger.debug('Total scoring time: {}'.format(total_scoring_time))
-    logger.debug('Total setup time: {}'.format(total_setup_time))
-    logger.debug('Total solving time: {}'.format(total_solving_time))
-    logger.debug('or-tools setup time: {}'.format(ortools_setup_time))
-    logger.debug('or-tools solving time: {}'.format(ortools_solving_time))
+    logger.debug('Total time zone0: {}'.format(total_time_zone0))
+    logger.debug('Total time zone1: {}'.format(total_time_zone1))
+    logger.debug('Total time zone2: {}'.format(total_time_zone2))
+    logger.debug('Total time zone3: {}'.format(total_time_zone3))
+    logger.debug('Failed aggloms: {}'.format(failed_aggloms))
 
     return Z, best_cut, best_cut_score
 
