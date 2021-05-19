@@ -616,34 +616,34 @@ def run_mock_icff(opt,
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
 
-        if r == 2:
-            embed()
-            exit()
+        #if r == 2:
+        #    embed()
+        #    exit()
 
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
 
-        ## generate constraints every `iters` round
-        #iters = 1
-        #if r % iters == 0: 
-        #    logger.debug('*** START - Generating Constraints ***')
-        #    # generate constraints and viable places given predictions
-        #    constraints = gen_constraint(
-        #        opt,
-        #        gold_entities,
-        #        pred_canon_ents,
-        #        pred_tree_nodes,
-        #        feat_freq,
-        #        constraints,
-        #        sim_func,
-        #        num_to_generate=opt.num_constraints_per_round
-        #    )
-        #    logger.debug('*** END - Generating Constraints ***')
+        # generate constraints every `iters` round
+        iters = 1
+        if r % iters == 0: 
+            logger.debug('*** START - Generating Constraints ***')
+            # generate constraints and viable places given predictions
+            constraints = gen_constraint(
+                opt,
+                gold_entities,
+                pred_canon_ents,
+                pred_tree_nodes,
+                feat_freq,
+                constraints,
+                sim_func,
+                num_to_generate=opt.num_constraints_per_round
+            )
+            logger.debug('*** END - Generating Constraints ***')
 
-        # NOTE: JUST FOR TESTING
-        constraints = [csr_matrix(2*ent - 1, dtype=float)
-                            for ent in gold_entities.toarray()]
+        ## NOTE: JUST FOR TESTING
+        #constraints = [csr_matrix(2*ent - 1, dtype=float)
+        #                    for ent in gold_entities.toarray()]
 
         logger.debug('*** START - Computing Viable Placements ***')
         viable_placements = constraint_compatible_nodes(
