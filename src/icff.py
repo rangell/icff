@@ -1,5 +1,6 @@
 import os
 import copy
+import time
 import pickle
 import random
 import logging
@@ -42,9 +43,15 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-def assign_constraint_level_set(scores, sum_to_one, sum_lt_one):
+def greedy_level_set_assign():
+    pass
+
+
+def assign_constraint_level_set(scores, sum_to_one, sum_lt_one, hints):
 
     num_vars = len(scores)
+
+    time0 = time.time()
 
     ### Model
     model = cp_model.CpModel()
@@ -59,18 +66,36 @@ def assign_constraint_level_set(scores, sum_to_one, sum_lt_one):
     for idx_group in sum_lt_one:
         model.Add(sum(x[i] for i in idx_group) <= 1)
 
+    ### Hints
+    if len(hints) > 0:
+        for i, val in hints.items():
+            if val is not None:
+                model.AddHint(x[i], val)
+
     ### Objective
     objective_terms = []
     for i in range(num_vars):
         objective_terms.append(scores[i] * x[i])
     model.Maximize(sum(objective_terms))
 
+    time1 = time.time()
+
     ### Solve
     solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 56
     status = solver.Solve(model)
     valid_soln = status == cp_model.OPTIMAL or status == cp_model.FEASIBLE
 
-    return valid_soln, solver.ObjectiveValue()
+    soln = [solver.BooleanValue(x[i]) for i in range(num_vars)]
+
+    time2 = time.time()
+
+    profile_dict = {
+        'ortools_setup_time': time1 - time0,
+        'ortools_solving_time': time2 - time1,
+    }
+
+    return valid_soln, solver.ObjectiveValue(), soln, profile_dict
 
 
 def custom_hac(opt, points, constraints, incompat_mx, compat_func):
@@ -90,10 +115,23 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
     cluster_ids = np.arange(num_points)
     intra_cluster_energies = np.ones_like(cluster_ids) * (1 / num_points)
     points_normd = normalize((points > 0).astype(int), norm='l2', axis=1)
+    if num_constraints > 0:
+        constraint_scores = compat_func(
+            (level_set > 0).astype(int),
+            Xi,
+            num_points if opt.super_compat_score else 1
+        )
+        prev_solns = {}
 
     #level_set_normd = normalize(level_set, norm='l2', axis=1)
     level_set_normd = normalize((level_set > 0).astype(int), norm='l2', axis=1)
     sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
+
+    total_scoring_time = 0.0
+    total_setup_time = 0.0
+    total_solving_time = 0.0
+    ortools_setup_time = 0.0
+    ortools_solving_time = 0.0
 
     invalid_cut = False
     for _ in trange(level_set.shape[0]-1):
@@ -195,15 +233,23 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
         assign_score = 0
         if num_constraints > 0:
 
+            time0 = time.time()
             # multiplicative constant since solver takes ints only
             precision_factor = 10000
 
             # TODO: see if we can make this faster with incremental updates avoiding recomputation each step
-            constraint_scores = compat_func(
-                (level_set > 0).astype(int),
+            new_constraint_scores = compat_func(
+                (level_set[-1] > 0).astype(int),
                 Xi,
                 num_points if opt.super_compat_score else 1
             )
+            constraint_scores = np.concatenate(
+                (constraint_scores[not_agglom_mask], new_constraint_scores),
+                axis=0
+            )
+
+            time1 = time.time()
+
             node_idxs, constraint_idxs = np.where(constraint_scores > 0)
             scores = constraint_scores[(node_idxs, constraint_idxs)]
             scores = (scores * precision_factor).astype(int)
@@ -228,9 +274,31 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
                     embed()
                     exit()
 
-            valid_soln, assign_score = assign_constraint_level_set(
-                scores, sum_to_one, sum_lt_one
+            time2 = time.time()
+
+            hints = {}
+            #if len(prev_solns) > 0:
+            #    hints = {
+            #        i : prev_solns.get((uids[node_idxs[i]], constraint_idxs[i]), None)
+            #        for i in range(len(scores))
+            #    }
+
+            valid_soln, assign_score, bool_assign, profile_dict = assign_constraint_level_set(
+                scores, sum_to_one, sum_lt_one, hints
             )
+
+            #prev_solns = {
+            #    (uids[n], c): a
+            #    for n, c, a in zip(node_idxs, constraint_idxs, bool_assign)
+            #}
+            
+            time3 = time.time()
+
+            total_scoring_time += time1 - time0
+            total_setup_time += time2 - time0
+            total_solving_time += time3 - time2
+            ortools_setup_time += profile_dict['ortools_setup_time']
+            ortools_solving_time += profile_dict['ortools_solving_time']
 
             if not valid_soln:
                 invalid_cut = True
@@ -254,210 +322,13 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
     # return the linkage matrix
     Z = np.vstack(Z)
 
+    logger.debug('Total scoring time: {}'.format(total_scoring_time))
+    logger.debug('Total setup time: {}'.format(total_setup_time))
+    logger.debug('Total solving time: {}'.format(total_solving_time))
+    logger.debug('or-tools setup time: {}'.format(ortools_setup_time))
+    logger.debug('or-tools solving time: {}'.format(ortools_solving_time))
+
     return Z, best_cut, best_cut_score
-
-
-def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
-    subcluster_leaves = subcluster.get_leaves()
-    assert len(subcluster_leaves) > 0
-
-    if opt.cluster_obj_reps == 'raw':
-        reps = sp.vstack([n.raw_rep for n in subcluster_leaves])
-    else:
-        assert opt.cluster_obj_reps == 'transformed'
-        reps = sp.vstack([n.transformed_rep for n in subcluster_leaves])
-
-    try:
-        canon_rep = sparse_agglom_rep(reps)
-    except InvalidAgglomError:
-        if opt.cluster_obj_reps == 'transformed':
-            canon_rep = get_nil_rep(rep_dim=reps.shape[1])
-        else:
-            raise InvalidAgglomError()
-
-    canon_rep_normd = normalize(canon_rep, norm='l2', axis=1)
-    reps_normd = normalize(reps, norm='l2', axis=1)
-    rep_affinities = dot_product_mkl(reps_normd, canon_rep_normd.T, dense=True)
-    return np.sum(rep_affinities) / num_points
-
-
-def constraint_satisfaction(opt,
-                            node,
-                            compat_func,
-                            constraints,
-                            num_points,
-                            num_constraints):
-
-    if len(constraints) > 0:
-        constraint_scores = compat_func(
-            node.raw_rep,
-            sp.vstack(constraints),
-            num_points if opt.super_compat_score else 1
-        )
-
-        if opt.compat_agg == 'avg':
-            constraint_scores /= num_constraints
-
-        # note: we only care about constraint_scores > 0
-        constraint_scores[constraint_scores < 0] = 0
-        constraint_scores = csr_matrix(constraint_scores)
-    else:
-        constraint_scores = get_nil_rep(rep_dim=len(constraints))
-
-    return constraint_scores
-
-
-def value_node(opt,
-               node,
-               sim_func,
-               compat_func,
-               constraints,
-               incompat_mx,
-               cost_per_cluster,
-               num_points,
-               num_constraints):
-
-    # compute raw materials
-    intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
-    intra_energy -= cost_per_cluster
-    constraint_scores = constraint_satisfaction(
-        opt, node, compat_func, constraints, num_points, num_constraints
-    )
-    if incompat_mx is not None:
-        compatibility_mx = (~incompat_mx).astype(float)
-        agg_constraint_score = np.mean(
-            dot_product_mkl(constraint_scores, compatibility_mx)
-        )
-    else:
-        # case: when there are no constraints
-        compatibility_mx = None
-        agg_constraint_score = 0.0
-
-    return (intra_energy,
-            agg_constraint_score, 
-            [node],
-            constraint_scores,
-            compatibility_mx)
-
-
-def memoize_subcluster(opt,
-                       node,
-                       sim_func,
-                       compat_func,
-                       constraints,
-                       incompat_mx,
-                       cost_per_cluster,
-                       num_points,
-                       num_constraints):
-
-    node_map = value_node(
-        opt,
-        node,
-        sim_func,
-        compat_func,
-        constraints,
-        incompat_mx,
-        cost_per_cluster,
-        num_points,
-        num_constraints
-    )
-
-    if len(node.children) > 0:
-        child_maps = [memoize_subcluster(opt,
-                                         c, 
-                                         sim_func,
-                                         compat_func,
-                                         constraints,
-                                         incompat_mx,
-                                         cost_per_cluster,
-                                         num_points,
-                                         num_constraints)
-                        for c in node.children]
-        assert len(child_maps) == 2 # restrict to binary trees for now
-
-        # resolve child maps
-        resolved_raw_score = np.sum([m[0] for m in child_maps])
-            
-        if len(constraints) > 0:
-            stacked_constraint_scores = sp.vstack(
-                (child_maps[0][3], child_maps[1][3])
-            )
-            resolved_constraint_scores = np.max(
-                stacked_constraint_scores, axis=0
-            ).tocsr()
-            right_mask = np.argmax(stacked_constraint_scores, axis=0).astype(bool)
-            left_mask = ~right_mask
-
-            right_compat_mask = (right_mask.T & right_mask).astype(float)
-            left_compat_mask = (left_mask.T & left_mask).astype(float)
-
-            left_incompat_mx = csr_matrix(1 - child_maps[0][4])
-            right_incompat_mx = csr_matrix(1 - child_maps[1][4])
-            
-            resolved_compatibility_mx = 1 - (
-                left_incompat_mx.multiply(left_compat_mask)
-                + right_incompat_mx.multiply(right_compat_mask)
-            ).toarray()
-            resolved_agg_constraint_score = np.mean(
-                dot_product_mkl(
-                    resolved_constraint_scores, resolved_compatibility_mx
-                )
-            )
-        else:
-            resolved_agg_constraint_score = 0
-            resolved_constraint_scores = get_nil_rep(rep_dim=len(constraints))
-            resolved_compatibility_mx = None
-
-        child_score = resolved_raw_score + resolved_agg_constraint_score
-        if child_score > (node_map[0] + node_map[1]):
-            resolved_cut_nodes = child_maps[0][2] + child_maps[1][2]
-            node_map= (resolved_raw_score,
-                       resolved_agg_constraint_score, 
-                       resolved_cut_nodes,
-                       resolved_constraint_scores,
-                       resolved_compatibility_mx)
-
-    return node_map
-        
-
-def get_opt_tree_cut(opt,
-                     pred_tree_nodes,
-                     sim_func,
-                     compat_func,
-                     constraints,
-                     cost_per_cluster,
-                     num_points,
-                     num_constraints):
-
-    incompat_mx = None
-    if len(constraints) > 0:
-        Xi = sp.vstack(constraints)
-        extreme_constraints = copy.deepcopy(Xi)
-        extreme_constraints.data *= np.inf
-        incompat_mx = dot_product_mkl(
-            extreme_constraints, extreme_constraints.T, dense=True
-        )
-        incompat_mx = (incompat_mx == -np.inf) | np.isnan(incompat_mx)
-
-    # recursively compute value map of root node
-    assert pred_tree_nodes[-1].parent is None
-
-    root_value_map = memoize_subcluster(
-        opt,
-        pred_tree_nodes[-1],
-        sim_func,
-        compat_func,
-        constraints,
-        incompat_mx,
-        cost_per_cluster,
-        num_points,
-        num_constraints
-    )
-
-    max_cut_score = root_value_map[0] + root_value_map[1]
-    max_cut = root_value_map[2]
-
-    return max_cut, max_cut_score
 
 
 def cluster_points(opt,
@@ -725,7 +596,7 @@ def run_mock_icff(opt,
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
 
-        if r == 1:
+        if r == 2:
             embed()
             exit()
 
