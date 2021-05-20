@@ -73,10 +73,6 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
 
         c_incompat_mask = incompat_mx[c, picked_cidxs]
         if np.any(picked_nidxs[c_incompat_mask] == n) :
-            print('!!!!!!!!! GOT HERE !!!!!!!!!!!!')
-            embed()
-            exit()
-
             # if incompatible do the following
             try:
                 _s, _n = running_vp[c].popleft()
@@ -113,7 +109,7 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
     raw_points_normd = normalize((raw_points > 0).astype(int), norm='l2', axis=1)
     if num_constraints > 0:
         constraint_scores = compat_func(
-            (level_set > 0).astype(int),
+            (raw_level_set > 0).astype(int),
             Xi,
             num_points if opt.super_compat_score else 1
         )
@@ -184,6 +180,9 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
         level_set = sp.vstack(
             (level_set[not_agglom_mask], agglom_rep)
         )
+        raw_level_set = sp.vstack(
+            (raw_level_set[not_agglom_mask], raw_agglom_rep)
+        )
 
         time2 = time.time()
 
@@ -246,12 +245,11 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
              np.array([agglom_energy]))
         )
 
-
         # compute best assignment of constraints to level_set
         assign_score = 0
         if num_constraints > 0:
             new_constraint_scores = compat_func(
-                (level_set[-1] > 0).astype(int),
+                (raw_level_set[-1] > 0).astype(int),
                 Xi,
                 num_points if opt.super_compat_score else 1
             )
