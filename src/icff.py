@@ -43,7 +43,7 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-def greedy_level_set_assign(viable_placements, incompat_mx, level_set_size):
+def greedy_level_set_assign(viable_placements, incompat_mx):
     # Setup:
     # - queue for every constraint (based on sorted list of viable placements)
     # - heap of proposed assignments for unassigned constraints
@@ -90,65 +90,13 @@ def greedy_level_set_assign(viable_placements, incompat_mx, level_set_size):
             picked_nidxs = np.append(picked_nidxs, int(n))
             picked_scores = np.append(picked_scores, -int(s))
 
-    mean_assign_scores = coo_matrix(
-        (picked_scores, ([0]*num_constraints, picked_nidxs)),
-        shape=(1, level_set_size)
-    )
-    mean_assign_scores.sum_duplicates()
-    count_assign_scores = coo_matrix(
-        ([1]*num_constraints, ([0]*num_constraints, picked_nidxs)),
-        shape=(1, level_set_size)
-    )
-    count_assign_scores.sum_duplicates()
-    mean_assign_scores.data = mean_assign_scores.data / count_assign_scores.data
-
-    return mean_assign_scores, valid_soln
+    return np.sum(picked_scores), valid_soln
 
 
-
-def assign_constraint_level_set(scores, sum_to_one, sum_lt_one, hints):
-
-    num_vars = len(scores)
-
-    ### Model
-    model = cp_model.CpModel()
-
-    ### Variables
-    x = [model.NewBoolVar(f'x[{i}]') for i in range(num_vars)]
-
-    ### Constraints
-    for idx_group in sum_to_one:
-        model.Add(sum(x[i] for i in idx_group) == 1)
-
-    for idx_group in sum_lt_one:
-        model.Add(sum(x[i] for i in idx_group) <= 1)
-
-    ### Hints
-    if len(hints) > 0:
-        for i, val in hints.items():
-            if val is not None:
-                model.AddHint(x[i], val)
-
-    ### Objective
-    objective_terms = []
-    for i in range(num_vars):
-        objective_terms.append(scores[i] * x[i])
-    model.Maximize(sum(objective_terms))
-
-    ### Solve
-    solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 56
-    status = solver.Solve(model)
-    valid_soln = status == cp_model.OPTIMAL or status == cp_model.FEASIBLE
-
-    soln = [solver.BooleanValue(x[i]) for i in range(num_vars)]
-
-    return valid_soln, solver.ObjectiveValue(), soln, profile_dict
-
-
-def custom_hac(opt, points, constraints, incompat_mx, compat_func):
+def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
 
     level_set = points.astype(float)
+    raw_level_set = raw_points.astype(float)
     Xi = sp.vstack(constraints) if len(constraints) > 0 else None
     uids = np.arange(level_set.shape[0])
     num_leaves = np.ones_like(uids)
@@ -162,7 +110,7 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
     best_cut = copy.deepcopy(uids)
     cluster_ids = np.arange(num_points)
     intra_cluster_energies = np.ones_like(cluster_ids) * (1 / num_points)
-    points_normd = normalize((points > 0).astype(int), norm='l2', axis=1)
+    raw_points_normd = normalize((raw_points > 0).astype(int), norm='l2', axis=1)
     if num_constraints > 0:
         constraint_scores = compat_func(
             (level_set > 0).astype(int),
@@ -197,12 +145,16 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
                 try:
                     agglom_rep = sparse_agglom_rep(level_set[agglom_mask])
+                    raw_agglom_rep = sparse_agglom_rep(
+                        raw_level_set[agglom_mask]
+                    )
                 except InvalidAgglomError:
                     failed_aggloms += 1
                     sim_mx[agglom_coord] = MIN_FLOAT
                     continue
             else:
                 agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
+                raw_agglom_rep = get_nil_rep(rep_dim=raw_level_set.shape[1])
             break
             
         assert np.sum(agglom_mask) == 2
@@ -249,6 +201,9 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
         agglom_rep_normd = normalize(
             (agglom_rep > 0).astype(int), norm='l2', axis=1
         )
+        raw_agglom_rep_normd = normalize(
+            (raw_agglom_rep > 0).astype(int), norm='l2', axis=1
+        )
         level_set_normd = sp.vstack(
             (level_set_normd[not_agglom_mask], agglom_rep_normd)
         )
@@ -280,7 +235,9 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
         # update intra cluster energies
         agglom_energy = np.sum(
             dot_product_mkl(
-                points_normd[new_cluster_mask], agglom_rep_normd.T, dense=True
+                raw_points_normd[new_cluster_mask],
+                raw_agglom_rep_normd.T,
+                dense=True
             )
         )
         agglom_energy /= num_points
@@ -288,6 +245,7 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
             (intra_cluster_energies[not_agglom_mask],
              np.array([agglom_energy]))
         )
+
 
         # compute best assignment of constraints to level_set
         assign_score = 0
@@ -318,28 +276,20 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
                 invalid_cut = True
                 continue
 
-            mean_assign_scores, valid_soln = greedy_level_set_assign(
-                viable_placements, incompat_mx, level_set.shape[0]
+            assign_score, valid_soln = greedy_level_set_assign(
+                viable_placements, incompat_mx
             )
 
             if not valid_soln:
                 invalid_cut = True
                 continue
 
-            assert np.all(mean_assign_scores.data > 0)
-            mean_assign_scores = mean_assign_scores.toarray().reshape(-1,)
-            mean_assign_scores[mean_assign_scores == 0] = 1
-            intra_cluster_energies *= mean_assign_scores
+            if opt.compat_agg == 'avg':
+                assign_score /= num_constraints
 
-            #if opt.compat_agg == 'avg':
-            #    assign_score /= num_constraints
-
-        #cut_score = np.sum(intra_cluster_energies)\
-        #          - (opt.cost_per_cluster * intra_cluster_energies.size)\
-        #          + assign_score
         cut_score = np.sum(intra_cluster_energies)\
-                    - (opt.cost_per_cluster * intra_cluster_energies.size)
-        
+                  - (opt.cost_per_cluster * intra_cluster_energies.size)\
+                  + assign_score
 
         if cut_score >= best_cut_score:
             #logger.debug((np.sum(intra_cluster_energies), 
@@ -378,6 +328,7 @@ def cluster_points(opt,
                    cost_per_cluster):
     # pull out all of the points
     points = sp.vstack([x.transformed_rep for x in leaf_nodes])
+    raw_points = sp.vstack([x.raw_rep for x in leaf_nodes])
     num_points = points.shape[0]
     num_constraints = len(constraints)
 
@@ -394,7 +345,7 @@ def cluster_points(opt,
 
     # run clustering and produce the linkage matrix
     Z, best_cut, cut_obj_score = custom_hac(
-        opt, points, constraints, incompat_mx, compat_func
+        opt, points, raw_points, constraints, incompat_mx, compat_func
     )
 
     # build the tree

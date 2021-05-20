@@ -9,7 +9,7 @@ python src/icff.py\
     --data_file="r8-test-stemmed.dataset.pkl"\
     --cost_per_cluster=8e-4\
     --max_rounds=10\
-    --num_constraints_per_round=100\
+    --num_constraints_per_round=5\
     --sim_func='cosine'\
     --compat_func='raw'\
     --constraint_strength=3\
