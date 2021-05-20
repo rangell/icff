@@ -73,11 +73,6 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
 
         c_incompat_mask = incompat_mx[c, picked_cidxs]
         if np.any(picked_nidxs[c_incompat_mask] == n) :
-
-            logger.debug('Inside failed constraint check')
-            embed()
-            exit()
-
             # if incompatible do the following
             try:
                 _s, _n = running_vp[c].popleft()

@@ -23,7 +23,6 @@ if __name__ == '__main__':
         pred_tree_nodes, constraints, viable_placements = pickle.load(f)
     print('Done.')
 
-
     placements_out = greedy_assign(
         pred_tree_nodes,
         constraints,
