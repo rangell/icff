@@ -43,7 +43,7 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-def greedy_level_set_assign(viable_placements, incompat_mx):
+def greedy_level_set_assign(viable_placements, incompat_mx, level_set_size):
     # Setup:
     # - queue for every constraint (based on sorted list of viable placements)
     # - heap of proposed assignments for unassigned constraints
@@ -73,6 +73,10 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
 
         c_incompat_mask = incompat_mx[c, picked_cidxs]
         if np.any(picked_nidxs[c_incompat_mask] == n) :
+            print('!!!!!!!!! GOT HERE !!!!!!!!!!!!')
+            embed()
+            exit()
+
             # if incompatible do the following
             try:
                 _s, _n = running_vp[c].popleft()
@@ -86,7 +90,19 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
             picked_nidxs = np.append(picked_nidxs, int(n))
             picked_scores = np.append(picked_scores, -int(s))
 
-    return np.sum(picked_scores), valid_soln
+    mean_assign_scores = coo_matrix(
+        (picked_scores, ([0]*num_constraints, picked_nidxs)),
+        shape=(1, level_set_size)
+    )
+    mean_assign_scores.sum_duplicates()
+    count_assign_scores = coo_matrix(
+        ([1]*num_constraints, ([0]*num_constraints, picked_nidxs)),
+        shape=(1, level_set_size)
+    )
+    count_assign_scores.sum_duplicates()
+    mean_assign_scores.data = mean_assign_scores.data / count_assign_scores.data
+
+    return mean_assign_scores, valid_soln
 
 
 
@@ -273,7 +289,6 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
              np.array([agglom_energy]))
         )
 
-
         # compute best assignment of constraints to level_set
         assign_score = 0
         if num_constraints > 0:
@@ -303,20 +318,28 @@ def custom_hac(opt, points, constraints, incompat_mx, compat_func):
                 invalid_cut = True
                 continue
 
-            assign_score, valid_soln = greedy_level_set_assign(
-                viable_placements, incompat_mx
+            mean_assign_scores, valid_soln = greedy_level_set_assign(
+                viable_placements, incompat_mx, level_set.shape[0]
             )
 
             if not valid_soln:
                 invalid_cut = True
                 continue
 
-            if opt.compat_agg == 'avg':
-                assign_score /= num_constraints
+            assert np.all(mean_assign_scores.data > 0)
+            mean_assign_scores = mean_assign_scores.toarray().reshape(-1,)
+            mean_assign_scores[mean_assign_scores == 0] = 1
+            intra_cluster_energies *= mean_assign_scores
 
+            #if opt.compat_agg == 'avg':
+            #    assign_score /= num_constraints
+
+        #cut_score = np.sum(intra_cluster_energies)\
+        #          - (opt.cost_per_cluster * intra_cluster_energies.size)\
+        #          + assign_score
         cut_score = np.sum(intra_cluster_energies)\
-                  - (opt.cost_per_cluster * intra_cluster_energies.size)\
-                  + assign_score
+                    - (opt.cost_per_cluster * intra_cluster_energies.size)
+        
 
         if cut_score >= best_cut_score:
             #logger.debug((np.sum(intra_cluster_energies), 
@@ -594,7 +617,7 @@ def run_mock_icff(opt,
     #    )
     #    leaves[i].transformed_rep = transformed_rep
 
-    for r in range(opt.max_rounds):
+    for r in range(opt.max_rounds+1):
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
         out = cluster_points(
