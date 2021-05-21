@@ -18,7 +18,6 @@ from scipy.special import softmax
 
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
-from sklearn.preprocessing import normalize
 
 import higra as hg
 from ortools.sat.python import cp_model
@@ -34,6 +33,7 @@ from utils import (MIN_FLOAT,
                    MAX_FLOAT,
                    InvalidAgglomError,
                    initialize_exp,
+                   get_tfidf_normd,
                    sparse_agglom_rep,
                    get_nil_rep,
                    get_constraint_incompat)
@@ -90,8 +90,8 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
     return np.sum(picked_scores), valid_soln
 
 
-def get_tfidf_normd(counts, idf):
-    return normalize(counts.multiply(idf), norm='l2', axis=1)
+def sparse_update(full, mask, new):
+    return sp.vstack((full[mask], new))
 
 
 def custom_hac(opt,
@@ -160,16 +160,18 @@ def custom_hac(opt,
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
                 try:
                     transformed_agglom_rep = sparse_agglom_rep(
-                        transformed_level_set[agglom_mask]
+                        transformed_level_set[agglom_mask], transformed_idf
                     )
                     raw_agglom_rep = sparse_agglom_rep(
-                        raw_level_set[agglom_mask]
+                        raw_level_set[agglom_mask], raw_idf
                     )
                 except InvalidAgglomError:
                     sim_mx[agglom_coord] = MIN_FLOAT
                     continue
             else:
-                transformed_agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
+                transformed_agglom_rep = get_nil_rep(
+                    rep_dim=transformed_level_set.shape[1]
+                )
                 raw_agglom_rep = get_nil_rep(rep_dim=raw_level_set.shape[1])
             break
             
@@ -188,12 +190,12 @@ def custom_hac(opt,
              float(agglom_num_leaves)]
         )
 
-        # update level set
-        level_set = sp.vstack(
-            (level_set[not_agglom_mask], agglom_rep)
+        # update level sets
+        transformed_level_set = sparse_update(
+            transformed_level_set, not_agglom_mask, transformed_agglom_rep
         )
-        raw_level_set = sp.vstack(
-            (raw_level_set[not_agglom_mask], raw_agglom_rep)
+        raw_level_set = sparse_update(
+            raw_level_set, not_agglom_mask, raw_agglom_rep
         )
 
         # update sim_mx

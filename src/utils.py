@@ -9,6 +9,7 @@ from collections import defaultdict
 
 import numpy as np
 from scipy.sparse import csr_matrix
+from sklearn.preprocessing import normalize
 
 from IPython import embed
 
@@ -126,29 +127,15 @@ class InvalidAgglomError(Exception):
     pass
 
 
-def sparse_agglom_rep(S):
+def get_tfidf_normd(counts, idf):
+    return normalize(counts.multiply(idf), norm='l2', axis=1)
 
-    # NOTE: numba might be nice here! -- though it isn't dense...
-    assert False
 
-    # sparse agglomeration of rows of S
-    _S = S.tocoo()
-    coord_map = defaultdict(set)
-    for c, d in zip(_S.col, _S.data):
-        coord_map[(0, c)].add(d)  # row is always 0
-        
-    if any([d == set([-1, 1]) for d in coord_map.values()]):
+def sparse_agglom_rep(S, idf):
+    if np.sum((S > 0).multiply(S < 0)) > 0:
         raise InvalidAgglomError()
 
-    agglom_row, agglom_col, agglom_data = zip(*[
-        (r, c, list(d)[0]) for (r, c), d in coord_map.items()
-    ])
-    agglom_rep = csr_matrix(
-        (agglom_data, (agglom_row, agglom_col)),
-        shape=(1, S.shape[1]),
-        dtype=float
-    )
-    return agglom_rep
+    return get_tfidf_normd(csr_matrix(np.sum(S, axis=0)), idf)
 
 
 def get_nil_rep(rep_dim=None):
