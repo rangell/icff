@@ -127,6 +127,10 @@ class InvalidAgglomError(Exception):
 
 
 def sparse_agglom_rep(S):
+
+    # NOTE: numba might be nice here! -- though it isn't dense...
+    assert False
+
     # sparse agglomeration of rows of S
     _S = S.tocoo()
     coord_map = defaultdict(set)
@@ -152,3 +156,17 @@ def get_nil_rep(rep_dim=None):
     return csr_matrix(
         ([], ([], [])), shape=(1, rep_dim), dtype=float
     )
+
+
+def get_constraint_incompat(constraints):
+    incompat_mx = None
+    if len(constraints) > 0:
+        Xi = sp.vstack(constraints)
+        extreme_constraints = copy.deepcopy(Xi)
+        extreme_constraints.data *= np.inf
+        incompat_mx = dot_product_mkl(
+            extreme_constraints, extreme_constraints.T, dense=True
+        )
+        incompat_mx = (incompat_mx == -np.inf) | np.isnan(incompat_mx)
+    return incompat_mx
+

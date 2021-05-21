@@ -35,7 +35,8 @@ from utils import (MIN_FLOAT,
                    InvalidAgglomError,
                    initialize_exp,
                    sparse_agglom_rep,
-                   get_nil_rep)
+                   get_nil_rep,
+                   get_constraint_incompat)
 
 from IPython import embed
 
@@ -89,24 +90,41 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
     return np.sum(picked_scores), valid_soln
 
 
-def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
+def get_tfidf_normd(counts, idf):
+    return normalize(counts.multiply(idf), norm='l2', axis=1)
 
-    level_set = points.astype(float)
+
+def custom_hac(opt,
+               raw_points,
+               raw_idf,
+               transformed_points,
+               transformed_idf,
+               constraints,
+               incompat_mx,
+               compat_func):
+
+    # constants
+    num_points = raw_points.shape[0]
+    num_constraints = len(constraints)
+
+    # initialize level sets
     raw_level_set = raw_points.astype(float)
-    Xi = sp.vstack(constraints) if len(constraints) > 0 else None
-    uids = np.arange(level_set.shape[0])
-    num_leaves = np.ones_like(uids)
-    Z = []
+    transformed_level_set = transformed_points.astype(float)
 
-    num_points = points.shape[0]
-    num_constraints = Xi.shape[0] if Xi is not None else 0
+    # bookkepping
+    Xi = sp.vstack(constraints) if len(constraints) > 0 else None
+    uids = np.arange(num_points)
+    num_leaves = np.ones_like(uids)
+    Z = np.empty((num_points-1, 4))
 
     # for computing best cut
     best_cut_score = MIN_FLOAT
     best_cut = copy.deepcopy(uids)
     cluster_ids = np.arange(num_points)
     intra_cluster_energies = np.ones_like(cluster_ids) * (1 / num_points)
-    raw_points_normd = normalize((raw_points > 0).astype(int), norm='l2', axis=1)
+
+    # pre-compute constraint_scores
+    raw_points_normd = get_tfidf_normd(raw_points, raw_idf)
     if num_constraints > 0:
         constraint_scores = compat_func(
             (raw_level_set > 0).astype(int),
@@ -115,19 +133,20 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
         )
         prev_solns = {}
 
-    #level_set_normd = normalize(level_set, norm='l2', axis=1)
-    level_set_normd = normalize((level_set > 0).astype(int), norm='l2', axis=1)
-    sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
+    # build initial similarity matrix
+    transformed_level_set_normd = get_tfidf_normd(
+        transformed_level_set, transformed_idf
+    )
+    sim_mx = dot_product_mkl(
+        transformed_level_set_normd, transformed_level_set_normd.T, dense=True
+    )
 
-    total_time_zone0 = 0
-    total_time_zone1 = 0
-    total_time_zone2 = 0
-    total_time_zone3 = 0
-    failed_aggloms = 0
-
+    # whether or not we can cut anymore
     invalid_cut = False
-    for _ in trange(level_set.shape[0]-1):
-        sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf # ignore diag
+
+    for r in trange(num_points-1):
+        # ignore diag
+        sim_mx[tuple([np.arange(transformed_level_set.shape[0])]*2)] = -np.inf
 
         # get next agglomeration
         while True:
@@ -140,40 +159,33 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
 
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
                 try:
-                    agglom_rep = sparse_agglom_rep(level_set[agglom_mask])
+                    transformed_agglom_rep = sparse_agglom_rep(
+                        transformed_level_set[agglom_mask]
+                    )
                     raw_agglom_rep = sparse_agglom_rep(
                         raw_level_set[agglom_mask]
                     )
                 except InvalidAgglomError:
-                    failed_aggloms += 1
                     sim_mx[agglom_coord] = MIN_FLOAT
                     continue
             else:
-                agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
+                transformed_agglom_rep = get_nil_rep(rep_dim=level_set.shape[1])
                 raw_agglom_rep = get_nil_rep(rep_dim=raw_level_set.shape[1])
             break
             
         assert np.sum(agglom_mask) == 2
-
-        time0 = time.time()
 
         # update data structures
         linkage_score = sim_mx[agglom_coord]
         not_agglom_mask = ~agglom_mask
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
 
-        invalid_cut = invalid_cut or (linkage_score <= MIN_FLOAT)
-
-        time1 = time.time()
-
         # update linkage matrix
-        Z.append(
-            np.array(
-                [float(uids[agglom_ind[0]]),
-                 float(uids[agglom_ind[1]]),
-                 float(linkage_score),
-                 float(agglom_num_leaves)]
-            )
+        Z[r] = np.array(
+            [float(uids[agglom_ind[0]]),
+             float(uids[agglom_ind[1]]),
+             float(linkage_score),
+             float(agglom_num_leaves)]
         )
 
         # update level set
@@ -184,8 +196,6 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
             (raw_level_set[not_agglom_mask], raw_agglom_rep)
         )
 
-        time2 = time.time()
-
         # update sim_mx
         num_untouched = np.sum(not_agglom_mask)
         sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
@@ -194,7 +204,8 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
             (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
         )
 
-        time3 = time.time()
+        embed()
+        exit()
 
         #agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
         agglom_rep_normd = normalize(
@@ -211,8 +222,6 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
         )
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
 
-        time4 = time.time()
-
         # update cluster_ids
         next_uid = np.max(uids) + 1
         new_cluster_mask = np.isin(cluster_ids, uids[agglom_mask])
@@ -228,6 +237,7 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
         )
 
         # don't need to evaluate cut because constraints cannot be satisfied
+        invalid_cut = invalid_cut or (linkage_score <= MIN_FLOAT)
         if invalid_cut:
             continue
 
@@ -296,54 +306,42 @@ def custom_hac(opt, points, raw_points, constraints, incompat_mx, compat_func):
             best_cut_score = cut_score
             best_cut = copy.deepcopy(uids)
 
-
-        total_time_zone0 += time1 - time0
-        total_time_zone1 += time2 - time1
-        total_time_zone2 += time3 - time2
-        total_time_zone3 += time4 - time3
-
     # sanity check
     assert level_set.shape[0] == 1
 
     # return the linkage matrix
     Z = np.vstack(Z)
 
-    logger.debug('Total time zone0: {}'.format(total_time_zone0))
-    logger.debug('Total time zone1: {}'.format(total_time_zone1))
-    logger.debug('Total time zone2: {}'.format(total_time_zone2))
-    logger.debug('Total time zone3: {}'.format(total_time_zone3))
-    logger.debug('Failed aggloms: {}'.format(failed_aggloms))
-
     return Z, best_cut, best_cut_score
 
 
 def cluster_points(opt,
+                   raw_points,
+                   raw_idf,
+                   transformed_points,
+                   transformed_idf,
                    leaf_nodes,
                    labels,
-                   sim_func,
-                   compat_func,
                    constraints,
-                   cost_per_cluster):
+                   compat_func):
+
     # pull out all of the points
-    points = sp.vstack([x.transformed_rep for x in leaf_nodes])
-    raw_points = sp.vstack([x.raw_rep for x in leaf_nodes])
-    num_points = points.shape[0]
+    num_points = raw_points.shape[0]
     num_constraints = len(constraints)
 
     # compute constraint incompatibility matrix
-    incompat_mx = None
-    if len(constraints) > 0:
-        Xi = sp.vstack(constraints)
-        extreme_constraints = copy.deepcopy(Xi)
-        extreme_constraints.data *= np.inf
-        incompat_mx = dot_product_mkl(
-            extreme_constraints, extreme_constraints.T, dense=True
-        )
-        incompat_mx = (incompat_mx == -np.inf) | np.isnan(incompat_mx)
+    incompat_mx = get_constraint_incompat(constraints)
 
     # run clustering and produce the linkage matrix
     Z, best_cut, cut_obj_score = custom_hac(
-        opt, points, raw_points, constraints, incompat_mx, compat_func
+        opt,
+        raw_points,
+        raw_idf,
+        transformed_points,
+        transformed_idf,
+        constraints,
+        incompat_mx,
+        compat_func
     )
 
     # build the tree
@@ -541,19 +539,27 @@ def get_feat_freq(mentions, mention_labels):
     return counts
 
 
+def compute_idf(points):
+    num_points = points.shape[0]
+    doc_freq = np.sum(points.astype(bool).astype(int), axis=0)
+    return np.log((num_points + 1) / (doc_freq + 1)) + 1
+
+
 def run_mock_icff(opt,
                   gold_entities,
                   mentions,
-                  mention_labels,
+                  labels,
                   sim_func,
                   compat_func):
 
-    constraints = []
     num_points = mentions.shape[0]
-    feat_freq = get_feat_freq(mentions, mention_labels)
+    constraints = []
+
+    # TODO: come back to maybe deleting this?
+    feat_freq = get_feat_freq(mentions, labels)
 
     # construct tree node objects for leaves
-    leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
+    leaf_nodes = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
 
     ## NOTE: JUST FOR TESTING
     #constraints = [csr_matrix(2*ent - 1, dtype=float)
@@ -567,26 +573,27 @@ def run_mock_icff(opt,
     #    leaves[i].transformed_rep = transformed_rep
 
     for r in range(opt.max_rounds+1):
+        # points are sparse count vectors
+        raw_points = sp.vstack([x.raw_rep for x in leaf_nodes])
+        raw_idf = compute_idf(raw_points)
+        transformed_points = sp.vstack([x.transformed_rep for x in leaf_nodes])
+        transformed_idf = compute_idf(transformed_points)
+
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
-        out = cluster_points(
-            opt,
-            leaves,
-            mention_labels,
-            sim_func,
-            compat_func,
-            constraints,
-            opt.cost_per_cluster
-        )
+        out = cluster_points(opt,
+                             raw_points,
+                             raw_idf,
+                             transformed_points,
+                             transformed_idf,
+                             leaf_nodes,
+                             labels,
+                             constraints,
+                             compat_func)
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
         logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
-
-        #if r == 2:
-        #    embed()
-        #    exit()
-
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
@@ -630,7 +637,7 @@ def run_mock_icff(opt,
         logger.debug('*** START - Projecting Assigned Constraints ***')
         # reset all leaf transformed_rep's
         logger.debug('Reseting leaves')
-        for node in leaves:
+        for node in leaf_nodes:
             node.transformed_rep = copy.deepcopy(node.raw_rep)
 
         # transform the placements out to leaf2constraints
