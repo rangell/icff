@@ -8,25 +8,26 @@ from utils import MIN_FLOAT
 from IPython import embed
 
 
-#def raw_overlap(node, constraint, num_points):
-def raw_overlap(raw_reps, stacked_constraints, num_points):
-    extreme_raw_reps = copy.deepcopy(raw_reps).astype(float)
-    extreme_raw_reps *= np.inf
+def raw_overlap(raw_points_normd, stacked_constraints, num_points):
+
+    pos_feats = raw_points_normd.astype(bool).astype(float)
+    extreme_raw_points_normd = copy.deepcopy(pos_feats)
+    extreme_raw_points_normd *= np.inf
     extreme_constraints = copy.deepcopy(stacked_constraints).astype(float)
     extreme_constraints.data *= np.inf
     compat_mx = dot_product_mkl(
-        extreme_raw_reps, extreme_constraints.T, dense=True
+        extreme_raw_points_normd, extreme_constraints.T, dense=True
     )
     incompat_mx = ((compat_mx == -np.inf) | np.isnan(compat_mx))
     pos_overlap_scores = dot_product_mkl(
-        raw_reps.astype(float), stacked_constraints.T, dense=True
+        pos_feats, stacked_constraints.T, dense=True
     )
     pos_overlap_scores = np.array(pos_overlap_scores)
     pos_overlap_mask = (pos_overlap_scores > 0)
     pos_feat_totals = np.array(np.sum(stacked_constraints > 0, axis=1).T)
     overlap_scores = pos_overlap_scores / pos_feat_totals
     overlap_scores *= pos_overlap_mask
-    overlap_scores[overlap_scores == 1] = num_points
+    #overlap_scores[overlap_scores == 1] = num_points
     overlap_scores[incompat_mx] = -np.inf
     return np.asarray(overlap_scores)
 

@@ -94,6 +94,10 @@ def sparse_update(full, mask, new):
     return sp.vstack((full[mask], new))
 
 
+def dense_update(full, mask, new):
+    return np.concatenate((full[mask], np.array([new])))
+
+
 def custom_hac(opt,
                raw_points,
                raw_idf,
@@ -127,7 +131,7 @@ def custom_hac(opt,
     raw_points_normd = get_tfidf_normd(raw_points, raw_idf)
     if num_constraints > 0:
         constraint_scores = compat_func(
-            (raw_level_set > 0).astype(int),
+            raw_points_normd,
             Xi,
             num_points if opt.super_compat_score else 1
         )
@@ -160,10 +164,10 @@ def custom_hac(opt,
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
                 try:
                     transformed_agglom_rep = sparse_agglom_rep(
-                        transformed_level_set[agglom_mask], transformed_idf
+                        transformed_level_set[agglom_mask]
                     )
                     raw_agglom_rep = sparse_agglom_rep(
-                        raw_level_set[agglom_mask], raw_idf
+                        raw_level_set[agglom_mask]
                     )
                 except InvalidAgglomError:
                     sim_mx[agglom_coord] = MIN_FLOAT
@@ -175,6 +179,7 @@ def custom_hac(opt,
                 raw_agglom_rep = get_nil_rep(rep_dim=raw_level_set.shape[1])
             break
             
+        # sanity check
         assert np.sum(agglom_mask) == 2
 
         # update data structures
@@ -190,12 +195,23 @@ def custom_hac(opt,
              float(agglom_num_leaves)]
         )
 
+        # get tfidf vectors for agglom reps
+        transformed_agglom_rep_normd = get_tfidf_normd(
+            transformed_agglom_rep, transformed_idf
+        )
+        raw_agglom_rep_normd = get_tfidf_normd(raw_agglom_rep, raw_idf)
+
         # update level sets
         transformed_level_set = sparse_update(
             transformed_level_set, not_agglom_mask, transformed_agglom_rep
         )
         raw_level_set = sparse_update(
             raw_level_set, not_agglom_mask, raw_agglom_rep
+        )
+        transformed_level_set_normd = sparse_update(
+            transformed_level_set_normd,
+            not_agglom_mask,
+            transformed_agglom_rep_normd
         )
 
         # update sim_mx
@@ -205,22 +221,10 @@ def custom_hac(opt,
         sim_mx = np.concatenate(
             (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
         )
-
-        embed()
-        exit()
-
-        #agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
-        agglom_rep_normd = normalize(
-            (agglom_rep > 0).astype(int), norm='l2', axis=1
-        )
-        raw_agglom_rep_normd = normalize(
-            (raw_agglom_rep > 0).astype(int), norm='l2', axis=1
-        )
-        level_set_normd = sp.vstack(
-            (level_set_normd[not_agglom_mask], agglom_rep_normd)
-        )
         new_sims = dot_product_mkl(
-            level_set_normd, agglom_rep_normd.T, dense=True
+            transformed_level_set_normd,
+            transformed_agglom_rep_normd.T,
+            dense=True
         )
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
 
@@ -230,13 +234,10 @@ def custom_hac(opt,
         cluster_ids[new_cluster_mask] = next_uid
 
         # update uids list
-        uids = np.concatenate(
-            (uids[not_agglom_mask], np.array([next_uid]))
-        )
+        uids = dense_update(uids, not_agglom_mask, next_uid)
+
         # update num_leaves list
-        num_leaves = np.concatenate(
-            (num_leaves[not_agglom_mask], np.array([agglom_num_leaves]))
-        )
+        num_leaves = dense_update(num_leaves, not_agglom_mask, agglom_num_leaves)
 
         # don't need to evaluate cut because constraints cannot be satisfied
         invalid_cut = invalid_cut or (linkage_score <= MIN_FLOAT)
@@ -252,16 +253,15 @@ def custom_hac(opt,
             )
         )
         agglom_energy /= num_points
-        intra_cluster_energies = np.concatenate(
-            (intra_cluster_energies[not_agglom_mask],
-             np.array([agglom_energy]))
+        intra_cluster_energies = dense_update(
+            intra_cluster_energies, not_agglom_mask, agglom_energy
         )
 
         # compute best assignment of constraints to level_set
         assign_score = 0
         if num_constraints > 0:
             new_constraint_scores = compat_func(
-                (raw_level_set[-1] > 0).astype(int),
+                raw_agglom_rep_normd,
                 Xi,
                 num_points if opt.super_compat_score else 1
             )
@@ -309,10 +309,7 @@ def custom_hac(opt,
             best_cut = copy.deepcopy(uids)
 
     # sanity check
-    assert level_set.shape[0] == 1
-
-    # return the linkage matrix
-    Z = np.vstack(Z)
+    assert raw_level_set.shape[0] == 1 and transformed_level_set.shape[0] == 1
 
     return Z, best_cut, best_cut_score
 
@@ -386,7 +383,7 @@ def cluster_points(opt,
 
     # the predicted entities canonicalization
     pred_canon_ents = sp.vstack(
-        [n.raw_rep for n in cut_frontier_nodes]
+        [n.raw_rep.astype(bool).astype(float) for n in cut_frontier_nodes]
     )
 
     # produce the predicted labels for leaves
@@ -567,12 +564,12 @@ def run_mock_icff(opt,
     #constraints = [csr_matrix(2*ent - 1, dtype=float)
     #                    for ent in gold_entities.toarray()]
     #for i, xi in enumerate(constraints):
-    #    first_compat_idx = np.where(mention_labels == i)[0][0]
+    #    first_compat_idx = np.where(labels == i)[0][0]
     #    first_compat_mention = mentions[first_compat_idx]
     #    transformed_rep = sparse_agglom_rep(
     #        sp.vstack((first_compat_mention, xi))
     #    )
-    #    leaves[i].transformed_rep = transformed_rep
+    #    leaf_nodes[i].transformed_rep = transformed_rep
 
     for r in range(opt.max_rounds+1):
         # points are sparse count vectors
@@ -623,7 +620,7 @@ def run_mock_icff(opt,
 
         logger.debug('*** START - Computing Viable Placements ***')
         viable_placements = constraint_compatible_nodes(
-            opt, pred_tree_nodes, constraints, compat_func, num_points
+            opt, pred_tree_nodes, raw_idf, constraints, compat_func, num_points
         )
         logger.debug('*** END - Computing Viable Placements ***')
 

@@ -1,5 +1,6 @@
 import os
 import sys
+import copy
 import logging
 import random
 import pickle
@@ -9,7 +10,9 @@ from collections import defaultdict
 
 import numpy as np
 from scipy.sparse import csr_matrix
+import scipy.sparse as sp
 from sklearn.preprocessing import normalize
+from sparse_dot_mkl import dot_product_mkl
 
 from IPython import embed
 
@@ -131,11 +134,14 @@ def get_tfidf_normd(counts, idf):
     return normalize(counts.multiply(idf), norm='l2', axis=1)
 
 
-def sparse_agglom_rep(S, idf):
+def sparse_agglom_rep(S):
+
+    # check if we can agglomerate
     if np.sum((S > 0).multiply(S < 0)) > 0:
         raise InvalidAgglomError()
 
-    return get_tfidf_normd(csr_matrix(np.sum(S, axis=0)), idf)
+    # if we can return the counts vector
+    return csr_matrix(np.sum(S, axis=0))
 
 
 def get_nil_rep(rep_dim=None):
