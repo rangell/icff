@@ -499,7 +499,7 @@ def gen_constraint(opt,
                 )) 
             neg_idxs = np.random.choice(
                 neg_pred_domain,
-                size=min(opt.constraint_strength, neg_pred_domain.size),
+                size=min([opt.constraint_strength, neg_pred_domain.size, np.sum(neg_feat_dist > 0)]),
                 replace=False,
                 p=neg_feat_dist
             )
@@ -646,6 +646,11 @@ def run_mock_icff(opt,
         for nuid, cuids in placements_out.items():
             for luid in nuid2luids[nuid]:
                 leaf2constraints[luid].update(cuids)
+
+        embed()
+        exit()
+
+        assignment_metrics = get_assign_metrics(leaf2constraints)
 
         # project resolved constraint placements to leaves
         logger.debug('Projecting constraints to expanded placements')
