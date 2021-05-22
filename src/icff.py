@@ -14,13 +14,12 @@ from tqdm import tqdm, trange
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse import csr_matrix, coo_matrix
-from scipy.special import softmax
+from scipy.special import log_softmax
 
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
 
 import higra as hg
-from ortools.sat.python import cp_model
 from sparse_dot_mkl import dot_product_mkl
 
 from assign import greedy_assign
@@ -377,6 +376,10 @@ def cluster_points(opt,
         )
         new_node_id += 1
 
+    # maximally pure mergers
+    maximally_pure_mergers = [n for n in pred_tree_nodes
+            if n.label is not None and n.parent.label is None]
+
     # extract cut frontier
     cut_frontier_nodes = [pred_tree_nodes[i] for i in best_cut]
 
@@ -402,12 +405,31 @@ def cluster_points(opt,
         'pred_k' : len(cut_frontier_nodes),
         'fits' : fits,
         'dp' : round(dp, 4),
+        '#maximal_pure_mergers' : len(maximal_pure_mergers),
         'adj_rand_idx' : round(adj_rand_idx, 4),
         'adj_mut_info' : round(adj_mut_info, 4),
         'cut_obj_score' : round(cut_obj_score, 4)
     }
 
     return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
+
+
+def gen_constraint_cheat(opt,
+                         gold_entities,
+                         pred_canon_ents,
+                         pred_tree_nodes,
+                         feat_freq,
+                         constraints,
+                         sim_func,
+                         num_to_generate=1):
+
+    # maximally pure mergers
+    maximally_pure_mergers = [n for n in pred_tree_nodes
+            if n.label is not None and n.parent.label is None]
+
+    embed()
+    exit()
+
 
 
 def gen_constraint(opt,
@@ -452,8 +474,10 @@ def gen_constraint(opt,
             )
             pos_idxs = np.array([])
             if pos_pred_domain.size > 0:
-                pos_feat_dist = softmax(
-                    feat_freq_normd[tgt_ent_idx, pos_pred_domain]
+                pos_feat_dist = np.exp(
+                    log_softmax(
+                        feat_freq_normd[tgt_ent_idx, pos_pred_domain]
+                    )
                 )
                 pos_idxs = np.random.choice(
                     pos_pred_domain,
@@ -464,8 +488,10 @@ def gen_constraint(opt,
 
             # sample "in"-features
             in_pred_domain = ff_pred_ent.multiply(tgt_gold_ent).tocoo().col
-            in_feat_dist = softmax(
-                feat_freq_normd[tgt_ent_idx][in_pred_domain]
+            in_feat_dist = np.exp(
+                log_softmax(
+                    feat_freq_normd[tgt_ent_idx][in_pred_domain]
+                )
             )
             in_idxs = np.random.choice(
                 in_pred_domain,
@@ -484,8 +510,10 @@ def gen_constraint(opt,
                         )
                     )
                 )
-                neg_feat_dist = softmax(
-                    np.sum(feat_freq[:, neg_pred_domain], axis=0)
+                neg_feat_dist = np.exp(
+                    log_softmax(
+                        np.sum(feat_freq[:, neg_pred_domain], axis=0)
+                    )
                 )
             else:
                 not_gold_mask = ~tgt_gold_ent.toarray().reshape(-1,).astype(bool)
@@ -493,13 +521,19 @@ def gen_constraint(opt,
                 corr_weights = np.sum(
                     feat_freq_normd[:, in_pred_domain], axis=1
                 )
-                neg_feat_dist = softmax(np.sum(
-                  feat_freq_normd[:, not_gold_mask] * corr_weights.reshape(-1, 1),
-                  axis=0
-                )) 
+                neg_feat_dist = np.exp(
+                    log_softmax(
+                        np.sum(
+                            feat_freq_normd[:, not_gold_mask]\
+                                    * corr_weights.reshape(-1, 1), axis=0
+                        )
+                    )
+                )
             neg_idxs = np.random.choice(
                 neg_pred_domain,
-                size=min([opt.constraint_strength, neg_pred_domain.size, np.sum(neg_feat_dist > 0)]),
+                size=min([opt.constraint_strength,
+                          neg_pred_domain.size,
+                          np.sum(neg_feat_dist > 0)]),
                 replace=False,
                 p=neg_feat_dist
             )
@@ -543,6 +577,32 @@ def compute_idf(points):
     return np.log((num_points + 1) / (doc_freq + 1)) + 1
 
 
+def get_assign_metrics(leaf2constraints, labels, gold_entities, constraints):
+    constraint2num_leaves = defaultdict(int)
+    num_wrong_assignments = 0
+    num_assignments = 0
+    for muids, cuids in leaf2constraints.items():
+        ent_id = labels[muids]
+        for cuid in cuids:
+            constraint2num_leaves[cuid] += 1
+            num_assignments += 1
+            if np.sum(np.abs(constraints[cuid]-gold_entities[ent_id]) == 2) > 0:
+                num_wrong_assignments += 1
+
+    num_lvs = list(constraint2num_leaves.values())
+
+    ret_str = "# lvs --  min: {} ; max: {} ; mean: {} "\
+              "-- frac wrong node assign : {} / {}".format(
+        np.min(num_lvs),
+        np.max(num_lvs),
+        np.mean(num_lvs),
+        num_wrong_assignments,
+        num_assignments
+    )
+
+    return ret_str
+
+
 def run_mock_icff(opt,
                   gold_entities,
                   mentions,
@@ -557,7 +617,8 @@ def run_mock_icff(opt,
     feat_freq = get_feat_freq(mentions, labels)
 
     # construct tree node objects for leaves
-    leaf_nodes = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
+    leaf_nodes = [TreeNode(i, m_rep, label=lbl)
+                    for i, (m_rep, lbl) in enumerate(zip(mentions, labels))]
 
     ## NOTE: JUST FOR TESTING
     #constraints = [csr_matrix(2*ent - 1, dtype=float)
@@ -601,7 +662,17 @@ def run_mock_icff(opt,
         if r % iters == 0: 
             logger.debug('*** START - Generating Constraints ***')
             # generate constraints and viable places given predictions
-            constraints = gen_constraint(
+            #constraints = gen_constraint(
+            #    opt,
+            #    gold_entities,
+            #    pred_canon_ents,
+            #    pred_tree_nodes,
+            #    feat_freq,
+            #    constraints,
+            #    sim_func,
+            #    num_to_generate=opt.num_constraints_per_round
+            #)
+            constraints = gen_constraint_cheat(
                 opt,
                 gold_entities,
                 pred_canon_ents,
@@ -647,10 +718,11 @@ def run_mock_icff(opt,
             for luid in nuid2luids[nuid]:
                 leaf2constraints[luid].update(cuids)
 
-        embed()
-        exit()
-
-        assignment_metrics = get_assign_metrics(leaf2constraints)
+        # get and display assignment metrics
+        assignment_metrics = get_assign_metrics(
+            leaf2constraints, labels, gold_entities, constraints
+        )
+        logger.info('assign metrics : {}'.format(assignment_metrics))
 
         # project resolved constraint placements to leaves
         logger.debug('Projecting constraints to expanded placements')
@@ -760,6 +832,12 @@ def set_compat_func(opt):
     return compat_func
 
 
+def drop_empty_columns(csr_mx):
+    csc_mx = csr_mx.tocsc()
+    csc_mx = csc_mx[:, np.diff(csc_mx.indptr) != 0]
+    return csc_mx.tocsr()
+
+
 def main():
     # get command line options
     opt = get_opt()
@@ -791,6 +869,10 @@ def main():
         else:
             with open(data_fname, 'rb') as f:
                 gold_entities, mentions, mention_labels = pickle.load(f)
+
+    # drop empty columns from mentions and entities
+    gold_entities = drop_empty_columns(gold_entities)
+    mentions = drop_empty_columns(mentions)
 
     # declare similarity and compatibility functions with function pointers
     assert opt.sim_func == 'cosine' # TODO: support more sim funcs

@@ -12,13 +12,12 @@ import scipy.sparse as sp
 from scipy.sparse import csr_matrix
 
 from sparse_dot_mkl import dot_product_mkl
-from ortools.sat.python import cp_model
-
 
 from IPython import embed
 
 
 logger = logging.getLogger(__name__)
+
 
 def greedy_assign(pred_tree_nodes, constraints, viable_placements):
     logger.debug('Reformating viable placements')

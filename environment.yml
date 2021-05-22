@@ -1,4 +1,62 @@
-name: name_of_your_env
+name: icff
 channels:
   - defaults
-prefix: /Users/rangell/miniconda3/envs/name_of_your_env
+dependencies:
+  - _libgcc_mutex=0.1=main
+  - backcall=0.2.0=pyhd3eb1b0_0
+  - blas=1.0=mkl
+  - ca-certificates=2021.4.13=h06a4308_1
+  - certifi=2020.12.5=py39h06a4308_0
+  - decorator=5.0.6=pyhd3eb1b0_0
+  - intel-openmp=2021.2.0=h06a4308_610
+  - ipython=7.22.0=py39hb070fc8_0
+  - ipython_genutils=0.2.0=pyhd3eb1b0_1
+  - jedi=0.17.2=py39h06a4308_1
+  - joblib=1.0.1=pyhd3eb1b0_0
+  - ld_impl_linux-64=2.33.1=h53a641e_7
+  - libffi=3.3=he6710b0_2
+  - libgcc-ng=9.1.0=hdf63c60_0
+  - libgfortran-ng=7.3.0=hdf63c60_0
+  - libllvm10=10.0.1=hbcb73fb_5
+  - libstdcxx-ng=9.1.0=hdf63c60_0
+  - llvmlite=0.36.0=py39h612dafd_4
+  - mkl=2021.2.0=h06a4308_296
+  - mkl-service=2.3.0=py39h27cfd23_1
+  - mkl_fft=1.3.0=py39h42c9631_2
+  - mkl_random=1.2.1=py39ha9443f7_2
+  - ncurses=6.2=he6710b0_1
+  - numba=0.53.1=py39ha9443f7_0
+  - numpy=1.20.1=py39h93e21f0_0
+  - numpy-base=1.20.1=py39h7d8b39e_0
+  - openssl=1.1.1k=h27cfd23_0
+  - parso=0.7.0=py_0
+  - pexpect=4.8.0=pyhd3eb1b0_3
+  - pickleshare=0.7.5=pyhd3eb1b0_1003
+  - pip=21.0.1=py39h06a4308_0
+  - prompt-toolkit=3.0.17=pyh06a4308_0
+  - ptyprocess=0.7.0=pyhd3eb1b0_2
+  - pygments=2.8.1=pyhd3eb1b0_0
+  - python=3.9.4=hdb3f193_0
+  - readline=8.1=h27cfd23_0
+  - scikit-learn=0.24.1=py39ha9443f7_0
+  - scipy=1.6.2=py39had2a1c9_1
+  - setuptools=52.0.0=py39h06a4308_0
+  - six=1.15.0=py39h06a4308_0
+  - sqlite=3.35.4=hdfb4753_0
+  - tbb=2020.3=hfd86e86_0
+  - threadpoolctl=2.1.0=pyh5ca1d4c_0
+  - tk=8.6.10=hbc83047_0
+  - tqdm=4.59.0=pyhd3eb1b0_1
+  - traitlets=5.0.5=pyhd3eb1b0_0
+  - tzdata=2020f=h52ac0ba_0
+  - wcwidth=0.2.5=py_0
+  - wheel=0.36.2=pyhd3eb1b0_0
+  - xz=5.2.5=h7b6447c_0
+  - zlib=1.2.11=h7b6447c_3
+  - pip:
+    - higra==0.6.4
+    - nmslib==2.1.1
+    - psutil==5.8.0
+    - pybind11==2.6.1
+    - sparse-dot-mkl==0.7.1
+prefix: /home/rangell/miniconda3/envs/icff
