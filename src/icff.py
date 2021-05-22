@@ -402,10 +402,11 @@ def cluster_points(opt,
     adj_mut_info = adj_mi(pred_labels, labels)
 
     metrics = {
-        'pred_k' : len(cut_frontier_nodes),
+        '# constraints': len(constraints),
         'fits' : fits,
+        'pred_k' : len(cut_frontier_nodes),
         'dp' : round(dp, 4),
-        '#maximal_pure_mergers' : len(maximal_pure_mergers),
+        '# maximally_pure_mergers' : len(maximally_pure_mergers),
         'adj_rand_idx' : round(adj_rand_idx, 4),
         'adj_mut_info' : round(adj_mut_info, 4),
         'cut_obj_score' : round(cut_obj_score, 4)
@@ -426,9 +427,34 @@ def gen_constraint_cheat(opt,
     # maximally pure mergers
     maximally_pure_mergers = [n for n in pred_tree_nodes
             if n.label is not None and n.parent.label is None]
+    
+    # create constraints using maximally pure mergers
+    for pure_merger in maximally_pure_mergers:
+        gold_ent_rep = gold_entities[pure_merger.label]
+        pm_transformed_rep = pure_merger.transformed_rep.astype(bool).astype(float)
+        par_transformed_rep = pure_merger.parent.transformed_rep.astype(bool).astype(float)
 
-    embed()
-    exit()
+        neg_feats = ((par_transformed_rep - gold_ent_rep) > 0).astype(float)
+        pos_feats = ((gold_ent_rep - pm_transformed_rep) > 0).astype(float)
+
+        in_idxs = pm_transformed_rep.tocoo().col
+        pos_idxs = np.random.choice(pos_feats.tocoo().col, size=(1,))
+        neg_idxs = np.random.choice(neg_feats.tocoo().col, size=(1,))
+
+        constraint_cols = np.concatenate((pos_idxs, in_idxs, neg_idxs), axis=0)
+        constraint_data = [1] * (pos_idxs.size + in_idxs.size)\
+                          + [-1] * neg_idxs.size
+        constraint_rows = np.zeros_like(constraint_cols)
+
+        new_constraint = csr_matrix(
+            (constraint_data, (constraint_rows, constraint_cols)),
+            shape=gold_ent_rep.shape,
+            dtype=float
+        )
+
+        constraints.append(new_constraint)
+
+    return constraints
 
 
 
@@ -591,8 +617,8 @@ def get_assign_metrics(leaf2constraints, labels, gold_entities, constraints):
 
     num_lvs = list(constraint2num_leaves.values())
 
-    ret_str = "# lvs --  min: {} ; max: {} ; mean: {} "\
-              "-- frac wrong node assign : {} / {}".format(
+    ret_str = "# lvs / constraint --  min: {} ; max: {} ; mean: {}\n"\
+              "frac wrong node assign : {} / {}".format(
         np.min(num_lvs),
         np.max(num_lvs),
         np.mean(num_lvs),
