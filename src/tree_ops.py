@@ -29,7 +29,7 @@ def constraint_compatible_nodes(opt,
         viable_placements.append(
             sorted(
                 compatible_nodes,
-                key=lambda x: (x[0], x[1].uid),
+                key=lambda x: (x[0], -x[1].uid),
                 reverse=True
             )
         )

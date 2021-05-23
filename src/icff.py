@@ -137,10 +137,10 @@ def custom_hac(opt,
 
     # build initial similarity matrix
     transformed_level_set_normd = get_tfidf_normd(
-        transformed_level_set, transformed_idf
+        transformed_level_set > 0, transformed_idf
     )
     sim_mx = dot_product_mkl(
-        transformed_level_set_normd, transformed_level_set_normd.T, dense=True
+        raw_level_set_normd, raw_level_set_normd.T, dense=True
     )
 
     # whether or not we can cut anymore
@@ -195,7 +195,8 @@ def custom_hac(opt,
 
         # get tfidf vectors for agglom reps
         transformed_agglom_rep_normd = get_tfidf_normd(
-            transformed_agglom_rep, transformed_idf
+            transformed_agglom_rep.multiply(transformed_agglom_rep > 0),
+            transformed_idf
         )
         raw_agglom_rep_normd = get_tfidf_normd(raw_agglom_rep, raw_idf)
 
@@ -298,6 +299,9 @@ def custom_hac(opt,
         cut_score = np.sum(intra_cluster_energies)\
                   - (opt.cost_per_cluster * intra_cluster_energies.size)\
                   + assign_score
+
+        if raw_level_set.shape[0] == 1:
+            continue
 
         if cut_score >= best_cut_score:
             #logger.debug((np.sum(intra_cluster_energies), 
@@ -427,9 +431,13 @@ def gen_constraint_cheat(opt,
     # maximally pure mergers
     maximally_pure_mergers = [n for n in pred_tree_nodes
             if n.label is not None and n.parent.label is None]
+    random.shuffle(maximally_pure_mergers)
+    pure_merger_iter = iter(maximally_pure_mergers)
     
     # create constraints using maximally pure mergers
-    for pure_merger in maximally_pure_mergers:
+    num_gen_constraints = 0
+    while num_gen_constraints < num_to_generate:
+        pure_merger = next(pure_merger_iter)
         gold_ent_rep = gold_entities[pure_merger.label]
         pm_transformed_rep = pure_merger.transformed_rep.astype(bool).astype(float)
         par_transformed_rep = pure_merger.parent.transformed_rep.astype(bool).astype(float)
@@ -437,9 +445,16 @@ def gen_constraint_cheat(opt,
         neg_feats = ((par_transformed_rep - gold_ent_rep) > 0).astype(float)
         pos_feats = ((gold_ent_rep - pm_transformed_rep) > 0).astype(float)
 
+        if pos_feats.tocoo().col.size == 0:
+            continue
+
+        logger.debug('Generating constraint for node: {}'.format(pure_merger.uid))
+
         in_idxs = pm_transformed_rep.tocoo().col
         pos_idxs = np.random.choice(pos_feats.tocoo().col, size=(1,))
-        neg_idxs = np.random.choice(neg_feats.tocoo().col, size=(1,))
+        #pos_idxs = pos_feats.tocoo().col
+        #neg_idxs = np.random.choice(neg_feats.tocoo().col, size=(1,))
+        neg_idxs = neg_feats.tocoo().col
 
         constraint_cols = np.concatenate((pos_idxs, in_idxs, neg_idxs), axis=0)
         constraint_data = [1] * (pos_idxs.size + in_idxs.size)\
@@ -454,8 +469,9 @@ def gen_constraint_cheat(opt,
 
         constraints.append(new_constraint)
 
-    return constraints
+        num_gen_constraints += 1
 
+    return constraints
 
 
 def gen_constraint(opt,
@@ -507,7 +523,8 @@ def gen_constraint(opt,
                 )
                 pos_idxs = np.random.choice(
                     pos_pred_domain,
-                    size=min(opt.constraint_strength, pos_pred_domain.size),
+                    #size=min(opt.constraint_strength, pos_pred_domain.size),
+                    size=1,
                     replace=False,
                     p=pos_feat_dist
                 )
@@ -557,9 +574,10 @@ def gen_constraint(opt,
                 )
             neg_idxs = np.random.choice(
                 neg_pred_domain,
-                size=min([opt.constraint_strength,
-                          neg_pred_domain.size,
-                          np.sum(neg_feat_dist > 0)]),
+                #size=min([opt.constraint_strength,
+                #          neg_pred_domain.size,
+                #          np.sum(neg_feat_dist > 0)]),
+                size=1,
                 replace=False,
                 p=neg_feat_dist
             )
@@ -679,6 +697,14 @@ def run_mock_icff(opt,
         logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
+
+        if r == 1:
+            supset_placement_leaves = [n.uid for n in pred_tree_nodes
+                    if set(placement_leaves).issubset(set([l.uid for l in n.get_leaves()]))]
+
+            embed()
+            exit()
+
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
             break
@@ -707,7 +733,7 @@ def run_mock_icff(opt,
                 constraints,
                 sim_func,
                 num_to_generate=opt.num_constraints_per_round
-            )
+            ) 
             logger.debug('*** END - Generating Constraints ***')
 
         ## NOTE: JUST FOR TESTING
@@ -728,6 +754,23 @@ def run_mock_icff(opt,
             viable_placements,
         )
         logger.debug('*** END - Assigning Constraints ***')
+
+        ### TEST: for debugging
+        compressed_assign = [(s, n.uid) for s, n in viable_placements[0]]
+        placement_leaves = [n.uid for n in pred_tree_nodes[3785].get_leaves()]
+
+        #with open('debug_cluster_lvs.pkl', 'rb') as f:
+        #    next_round_sib_lvs = pickle.load(f)
+
+        #supset_placement_leaves = [n.uid for n in pred_tree_nodes
+        #        if set(next_round_sib_lvs).issubset(set([l.uid for l in n.get_leaves()]))]
+
+        #embed()
+        #exit()
+
+        ###
+
+        logger.debug('Constraint assignments: {}'.format(placements_out))
 
         logger.debug('*** START - Projecting Assigned Constraints ***')
         # reset all leaf transformed_rep's

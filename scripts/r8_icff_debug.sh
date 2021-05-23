@@ -7,12 +7,12 @@ python src/icff.py\
     --seed=27\
     --data_dir="data/real/"\
     --data_file="r8-test-stemmed.dataset.pkl"\
-    --cost_per_cluster=7.5e-4\
+    --cost_per_cluster=1e-3\
     --max_rounds=60\
-    --num_constraints_per_round=5\
+    --num_constraints_per_round=1\
     --sim_func='cosine'\
     --compat_func='raw'\
-    --constraint_strength=5\
+    --constraint_strength=20\
     --cluster_obj_reps='raw'\
     --compat_agg='avg'\
     --debug
