@@ -137,10 +137,11 @@ def custom_hac(opt,
 
     # build initial similarity matrix
     transformed_level_set_normd = get_tfidf_normd(
-        transformed_level_set > 0, transformed_idf
+        transformed_level_set.multiply(transformed_level_set > 0),
+        transformed_idf
     )
     sim_mx = dot_product_mkl(
-        raw_level_set_normd, raw_level_set_normd.T, dense=True
+        transformed_level_set_normd, transformed_level_set_normd.T, dense=True
     )
 
     # whether or not we can cut anymore
