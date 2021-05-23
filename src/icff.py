@@ -440,8 +440,9 @@ def gen_constraint_cheat(opt,
     while num_gen_constraints < num_to_generate:
         pure_merger = next(pure_merger_iter)
         gold_ent_rep = gold_entities[pure_merger.label]
-        pm_transformed_rep = pure_merger.transformed_rep.astype(bool).astype(float)
-        par_transformed_rep = pure_merger.parent.transformed_rep.astype(bool).astype(float)
+
+        pm_transformed_rep = (pure_merger.transformed_rep > 0).astype(float)
+        par_transformed_rep = (pure_merger.parent.transformed_rep > 0).astype(float)
 
         neg_feats = ((par_transformed_rep - gold_ent_rep) > 0).astype(float)
         pos_feats = ((gold_ent_rep - pm_transformed_rep) > 0).astype(float)
@@ -760,14 +761,14 @@ def run_mock_icff(opt,
         compressed_assign = [(s, n.uid) for s, n in viable_placements[0]]
         placement_leaves = [n.uid for n in pred_tree_nodes[3785].get_leaves()]
 
-        #with open('debug_cluster_lvs.pkl', 'rb') as f:
-        #    next_round_sib_lvs = pickle.load(f)
+        with open('debug_cluster_lvs.pkl', 'rb') as f:
+            next_round_sib_lvs = pickle.load(f)
 
-        #supset_placement_leaves = [n.uid for n in pred_tree_nodes
-        #        if set(next_round_sib_lvs).issubset(set([l.uid for l in n.get_leaves()]))]
+        supset_placement_leaves = [n.uid for n in pred_tree_nodes
+                if set(next_round_sib_lvs).issubset(set([l.uid for l in n.get_leaves()]))]
 
-        #embed()
-        #exit()
+        embed()
+        exit()
 
         ###
 
