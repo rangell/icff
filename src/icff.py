@@ -98,9 +98,8 @@ def dense_update(full, mask, new):
 
 def custom_hac(opt,
                raw_points,
-               raw_idf,
                transformed_points,
-               transformed_idf,
+               idf,
                constraints,
                incompat_mx,
                compat_func):
@@ -126,7 +125,7 @@ def custom_hac(opt,
     intra_cluster_energies = np.ones_like(cluster_ids) * (1 / num_points)
 
     # pre-compute constraint_scores
-    raw_points_normd = get_tfidf_normd(raw_points, raw_idf)
+    raw_points_normd = get_tfidf_normd(raw_points, idf)
     if num_constraints > 0:
         constraint_scores = compat_func(
             raw_points_normd,
@@ -137,8 +136,7 @@ def custom_hac(opt,
 
     # build initial similarity matrix
     transformed_level_set_normd = get_tfidf_normd(
-        transformed_level_set.multiply(transformed_level_set > 0),
-        transformed_idf
+        transformed_level_set.multiply(transformed_level_set > 0), idf
     )
     sim_mx = dot_product_mkl(
         transformed_level_set_normd, transformed_level_set_normd.T, dense=True
@@ -196,10 +194,9 @@ def custom_hac(opt,
 
         # get tfidf vectors for agglom reps
         transformed_agglom_rep_normd = get_tfidf_normd(
-            transformed_agglom_rep.multiply(transformed_agglom_rep > 0),
-            transformed_idf
+            transformed_agglom_rep.multiply(transformed_agglom_rep > 0), idf
         )
-        raw_agglom_rep_normd = get_tfidf_normd(raw_agglom_rep, raw_idf)
+        raw_agglom_rep_normd = get_tfidf_normd(raw_agglom_rep, idf)
 
         # update level sets
         transformed_level_set = sparse_update(
@@ -319,9 +316,8 @@ def custom_hac(opt,
 
 def cluster_points(opt,
                    raw_points,
-                   raw_idf,
                    transformed_points,
-                   transformed_idf,
+                   idf,
                    leaf_nodes,
                    labels,
                    constraints,
@@ -338,9 +334,8 @@ def cluster_points(opt,
     Z, best_cut, cut_obj_score = custom_hac(
         opt,
         raw_points,
-        raw_idf,
         transformed_points,
-        transformed_idf,
+        idf,
         constraints,
         incompat_mx,
         compat_func
@@ -429,11 +424,25 @@ def gen_constraint_cheat(opt,
                          sim_func,
                          num_to_generate=1):
 
+    assert num_to_generate == 1
+
     # maximally pure mergers
     maximally_pure_mergers = [n for n in pred_tree_nodes
             if n.label is not None and n.parent.label is None]
-    random.shuffle(maximally_pure_mergers)
+    #random.shuffle(maximally_pure_mergers)
+
+    # TESTING: fixed target pure merger (the pure merger with mention 0 in it
+    maximally_pure_mergers = [pm for pm in maximally_pure_mergers 
+            if len([x for x in pm.get_leaves() if x.uid == 0]) > 0]
+
+    logger.debug('tgt pm {} - num leaves: {}'.format(
+            maximally_pure_mergers[0].uid,
+            len(maximally_pure_mergers[0].get_leaves())
+        )
+    )
+
     pure_merger_iter = iter(maximally_pure_mergers)
+
     
     # create constraints using maximally pure mergers
     num_gen_constraints = 0
@@ -677,35 +686,51 @@ def run_mock_icff(opt,
     #    )
     #    leaf_nodes[i].transformed_rep = transformed_rep
 
+    raw_points = sp.vstack([x.raw_rep for x in leaf_nodes])
+    idf = compute_idf(raw_points)
+
     for r in range(opt.max_rounds+1):
         # points are sparse count vectors
-        raw_points = sp.vstack([x.raw_rep for x in leaf_nodes])
-        raw_idf = compute_idf(raw_points)
         transformed_points = sp.vstack([x.transformed_rep for x in leaf_nodes])
-        transformed_idf = compute_idf(transformed_points)
 
         logger.debug('*** START - Clustering Points ***')
         # cluster the points
-        out = cluster_points(opt,
-                             raw_points,
-                             raw_idf,
-                             transformed_points,
-                             transformed_idf,
-                             leaf_nodes,
-                             labels,
-                             constraints,
-                             compat_func)
+        if r == 0:
+            with open('cluster_out_r0.pkl', 'rb') as f:
+                out = pickle.load(f)
+        else:
+            out = cluster_points(opt,
+                                 raw_points,
+                                 transformed_points,
+                                 idf,
+                                 leaf_nodes,
+                                 labels,
+                                 constraints,
+                                 compat_func)
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
         logger.debug('*** END - Clustering Points ***')
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
 
-        #if r == 2:
-        #    supset_placement_leaves = [n.uid for n in pred_tree_nodes
-        #            if set(placement_leaves).issubset(set([l.uid for l in n.get_leaves()]))]
+        # keeping track of the tgt max pm
+        maximally_pure_mergers = [n for n in pred_tree_nodes
+                if n.label is not None and n.parent.label is None]
+        maximally_pure_mergers = [pm for pm in maximally_pure_mergers 
+                if len([x for x in pm.get_leaves() if x.uid == 0]) > 0]
 
-        #    embed()
-        #    exit()
+        logger.debug('tgt pm {} - num leaves: {}'.format(
+                maximally_pure_mergers[0].uid,
+                len(maximally_pure_mergers[0].get_leaves())
+            )
+        )
+
+        # for debugging
+        if r == 1:
+            #supset_placement_leaves = [n.uid for n in pred_tree_nodes
+            #        if set(placement_leaves).issubset(set([l.uid for l in n.get_leaves()]))]
+
+            embed()
+            exit()
 
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
@@ -744,7 +769,7 @@ def run_mock_icff(opt,
 
         logger.debug('*** START - Computing Viable Placements ***')
         viable_placements = constraint_compatible_nodes(
-            opt, pred_tree_nodes, raw_idf, constraints, compat_func, num_points
+            opt, pred_tree_nodes, idf, constraints, compat_func, num_points
         )
         logger.debug('*** END - Computing Viable Placements ***')
 
