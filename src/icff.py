@@ -170,7 +170,7 @@ def custom_hac(opt,
                     continue
             else:
                 agglom_rep = get_nil_rep(
-                    rep_dim=transformed_level_set.shape[1]
+                    rep_dim=level_set.shape[1]
                 )
             break
             
@@ -180,6 +180,7 @@ def custom_hac(opt,
         # update data structures
         linkage_score = sim_mx[agglom_coord]
         not_agglom_mask = ~agglom_mask
+        num_untouched = np.sum(not_agglom_mask)
         agglom_num_leaves = sum([num_leaves[x] for x in agglom_ind])
 
         # update linkage matrix
@@ -201,8 +202,25 @@ def custom_hac(opt,
             level_set_normd, not_agglom_mask, agglom_rep_normd
         )
 
+        # update agglom_incompat_mx
+        merged_agglom_incompat = (agglom_incompat_mx[agglom_coord[0].item()] 
+                                  | agglom_incompat_mx[agglom_coord[1].item()])
+        merged_agglom_incompat = merged_agglom_incompat[not_agglom_mask]
+        agglom_incompat_mx = agglom_incompat_mx[
+            not_agglom_mask[:,None] & not_agglom_mask[None,:]
+        ]
+        agglom_incompat_mx = agglom_incompat_mx.reshape(
+            num_untouched, num_untouched
+        )
+        agglom_incompat_mx = np.concatenate(
+            (agglom_incompat_mx, merged_agglom_incompat[None,:]), axis=0
+        )
+        merged_agglom_incompat = np.append(merged_agglom_incompat, False)
+        agglom_incompat_mx = np.concatenate(
+            (agglom_incompat_mx, merged_agglom_incompat[:,None]), axis=1
+        )
+
         # update sim_mx
-        num_untouched = np.sum(not_agglom_mask)
         sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
         sim_mx = sim_mx.reshape(num_untouched, num_untouched)
         sim_mx = np.concatenate(
@@ -456,7 +474,7 @@ def gen_constraint_cheat(opt,
 
         logger.debug('Generating constraint for node: {}'.format(pure_merger.uid))
 
-        num_pos = 5
+        num_pos = 1
 
         in_idxs = pm_transformed_rep.tocoo().col
         pos_idxs = np.random.choice(pos_feats.tocoo().col, size=(num_pos,))
@@ -722,10 +740,10 @@ def run_mock_icff(opt,
             )
         )
 
-        # for debugging
-        if r == 2:
-            embed()
-            exit()
+        ## for debugging
+        #if r == 2:
+        #    embed()
+        #    exit()
 
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
@@ -758,10 +776,10 @@ def run_mock_icff(opt,
             ) 
             logger.debug('*** END - Generating Constraints ***')
 
+
         ## NOTE: JUST FOR TESTING
         #constraints = [csr_matrix(2*ent - 1, dtype=float)
         #                    for ent in gold_entities.toarray()]
-
         logger.debug('*** START - Computing Viable Placements ***')
         viable_placements = constraint_compatible_nodes(
             opt, pred_tree_nodes, idf, constraints, compat_func, num_points
@@ -815,8 +833,14 @@ def run_mock_icff(opt,
         # project resolved constraint placements to leaves
         logger.debug('Projecting constraints to expanded placements')
         for nuid, cuids in leaf2constraints.items():
-            reps = [pred_tree_nodes[nuid].transformed_rep]\
-                    + [constraints[cuid] for cuid in cuids]
+            constraint_reps = [constraints[cuid] for cuid in cuids]
+            agglom_constraints = sparse_agglom_rep(
+                sp.vstack(constraint_reps)
+            )
+            # clamp agglom constraints
+            agglom_constraints[agglom_constraints < -1] = -1
+            agglom_constraints[agglom_constraints > 1] = 1
+            reps = [pred_tree_nodes[nuid].transformed_rep, agglom_constraints]
             pred_tree_nodes[nuid].transformed_rep = sparse_agglom_rep(
                 sp.vstack(reps)
             )
