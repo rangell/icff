@@ -700,12 +700,12 @@ def run_mock_icff(opt,
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
 
-        if r == 1:
-            supset_placement_leaves = [n.uid for n in pred_tree_nodes
-                    if set(placement_leaves).issubset(set([l.uid for l in n.get_leaves()]))]
+        #if r == 2:
+        #    supset_placement_leaves = [n.uid for n in pred_tree_nodes
+        #            if set(placement_leaves).issubset(set([l.uid for l in n.get_leaves()]))]
 
-            embed()
-            exit()
+        #    embed()
+        #    exit()
 
         if metrics['adj_rand_idx'] == 1.0:
             logger.info("perfect clustering reached in {} rounds".format(r))
@@ -757,20 +757,17 @@ def run_mock_icff(opt,
         )
         logger.debug('*** END - Assigning Constraints ***')
 
-        ### TEST: for debugging
-        compressed_assign = [(s, n.uid) for s, n in viable_placements[0]]
-        placement_leaves = [n.uid for n in pred_tree_nodes[3785].get_leaves()]
+        #### TEST: for debugging
+        #compressed_assign = [(s, n.uid) for s, n in viable_placements[0]]
+        #placement_leaves = [n.uid for n in pred_tree_nodes[3785].get_leaves()]
 
-        with open('debug_cluster_lvs.pkl', 'rb') as f:
-            next_round_sib_lvs = pickle.load(f)
+        #with open('debug_cluster_lvs.pkl', 'rb') as f:
+        #    next_round_sib_lvs = pickle.load(f)
 
-        supset_placement_leaves = [n.uid for n in pred_tree_nodes
-                if set(next_round_sib_lvs).issubset(set([l.uid for l in n.get_leaves()]))]
+        #supset_placement_leaves = [n.uid for n in pred_tree_nodes
+        #        if set(next_round_sib_lvs).issubset(set([l.uid for l in n.get_leaves()]))]
 
-        embed()
-        exit()
-
-        ###
+        ####
 
         logger.debug('Constraint assignments: {}'.format(placements_out))
 
