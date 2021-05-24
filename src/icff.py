@@ -461,15 +461,17 @@ def gen_constraint_cheat(opt,
 
         logger.debug('Generating constraint for node: {}'.format(pure_merger.uid))
 
+        num_pos = 5
+
         in_idxs = pm_transformed_rep.tocoo().col
-        pos_idxs = np.random.choice(pos_feats.tocoo().col, size=(1,))
-        #pos_idxs = pos_feats.tocoo().col
+        pos_idxs = np.random.choice(pos_feats.tocoo().col, size=(num_pos,))
         #neg_idxs = np.random.choice(neg_feats.tocoo().col, size=(1,))
         neg_idxs = neg_feats.tocoo().col
 
         constraint_cols = np.concatenate((pos_idxs, in_idxs, neg_idxs), axis=0)
-        constraint_data = [1] * (pos_idxs.size + in_idxs.size)\
-                          + [-1] * neg_idxs.size
+        constraint_data = np.array(
+            [1] * (pos_idxs.size + in_idxs.size) + [-1] * neg_idxs.size
+        ).astype(float)
         constraint_rows = np.zeros_like(constraint_cols)
 
         new_constraint = csr_matrix(
@@ -598,11 +600,11 @@ def gen_constraint(opt,
             ff_constraint_data = [1] * (pos_idxs.size + in_idxs.size)\
                                  + [-1] * neg_idxs.size
             ff_constraint_rows = np.zeros_like(ff_constraint_cols)
-            ff_constraint = csr_matrix(
+            ff_constraint = coo_matrix(
                (ff_constraint_data, (ff_constraint_rows, ff_constraint_cols)),
                shape=tgt_gold_ent.shape,
                dtype=float
-            )
+            ).tocsr()
 
             # check to make sure this constraint doesn't exist yet
             already_exists = np.any([
@@ -694,6 +696,7 @@ def run_mock_icff(opt,
         transformed_points = sp.vstack([x.transformed_rep for x in leaf_nodes])
 
         logger.debug('*** START - Clustering Points ***')
+
         # cluster the points
         if r == 0:
             with open('cluster_out_r0.pkl', 'rb') as f:
@@ -725,10 +728,7 @@ def run_mock_icff(opt,
         )
 
         # for debugging
-        if r == 1:
-            #supset_placement_leaves = [n.uid for n in pred_tree_nodes
-            #        if set(placement_leaves).issubset(set([l.uid for l in n.get_leaves()]))]
-
+        if r == 2:
             embed()
             exit()
 
@@ -963,9 +963,9 @@ def main():
             with open(data_fname, 'rb') as f:
                 gold_entities, mentions, mention_labels = pickle.load(f)
 
-    # drop empty columns from mentions and entities
-    gold_entities = drop_empty_columns(gold_entities)
-    mentions = drop_empty_columns(mentions)
+    ## drop empty columns from mentions and entities
+    #gold_entities = drop_empty_columns(gold_entities)
+    #mentions = drop_empty_columns(mentions)
 
     # declare similarity and compatibility functions with function pointers
     assert opt.sim_func == 'cosine' # TODO: support more sim funcs
