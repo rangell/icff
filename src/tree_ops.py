@@ -21,6 +21,9 @@ def constraint_compatible_nodes(opt,
         sp.vstack(constraints),
         num_points if opt.super_compat_score else 1
     )
+    
+    unassignable_uids = set([n.uid for n in nodes 
+                                if n.transformed_rep.nnz == 0])
 
     viable_placements = []
     for scores in overlap_scores.T:
@@ -28,7 +31,12 @@ def constraint_compatible_nodes(opt,
         compatible_nodes = [(scores[i], nodes[i]) for i in node_indices]
         viable_placements.append(
             sorted(
-                compatible_nodes,
+                list(
+                    filter(
+                        lambda x : x[1].uid not in unassignable_uids,
+                        compatible_nodes
+                    )
+                ),
                 key=lambda x: (x[0], -x[1].uid),
                 reverse=True
             )

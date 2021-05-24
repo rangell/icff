@@ -787,9 +787,6 @@ def run_mock_icff(opt,
         viable_placements = constraint_compatible_nodes(
             opt, pred_tree_nodes, idf, constraints, compat_func, num_points
         )
-
-        # TODO: filter viable placements
-
         logger.debug('*** END - Computing Viable Placements ***')
 
         logger.debug('*** START - Assigning Constraints ***')
