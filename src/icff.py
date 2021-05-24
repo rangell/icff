@@ -442,11 +442,7 @@ def gen_constraint_cheat(opt,
     # maximally pure mergers
     maximally_pure_mergers = [n for n in pred_tree_nodes
             if n.label is not None and n.parent.label is None]
-    #random.shuffle(maximally_pure_mergers)
-
-    # TESTING: fixed target pure merger (the pure merger with mention 0 in it
-    maximally_pure_mergers = [pm for pm in maximally_pure_mergers 
-            if len([x for x in pm.get_leaves() if x.uid == 0]) > 0]
+    random.shuffle(maximally_pure_mergers)
 
     logger.debug('tgt pm {} - num leaves: {}'.format(
             maximally_pure_mergers[0].uid,
@@ -456,7 +452,6 @@ def gen_constraint_cheat(opt,
 
     pure_merger_iter = iter(maximally_pure_mergers)
 
-    
     # create constraints using maximally pure mergers
     num_gen_constraints = 0
     while num_gen_constraints < num_to_generate:
@@ -728,17 +723,17 @@ def run_mock_icff(opt,
 
         logger.info("round: {} - metrics: {}".format(r, metrics))
 
-        # keeping track of the tgt max pm
-        maximally_pure_mergers = [n for n in pred_tree_nodes
-                if n.label is not None and n.parent.label is None]
-        maximally_pure_mergers = [pm for pm in maximally_pure_mergers 
-                if len([x for x in pm.get_leaves() if x.uid == 0]) > 0]
+        ## keeping track of the tgt max pm
+        #maximally_pure_mergers = [n for n in pred_tree_nodes
+        #        if n.label is not None and n.parent.label is None]
+        #maximally_pure_mergers = [pm for pm in maximally_pure_mergers 
+        #        if len([x for x in pm.get_leaves() if x.uid == 0]) > 0]
 
-        logger.debug('tgt pm {} - num leaves: {}'.format(
-                maximally_pure_mergers[0].uid,
-                len(maximally_pure_mergers[0].get_leaves())
-            )
-        )
+        #logger.debug('tgt pm {} - num leaves: {}'.format(
+        #        maximally_pure_mergers[0].uid,
+        #        len(maximally_pure_mergers[0].get_leaves())
+        #    )
+        #)
 
         ## for debugging
         #if r == 2:
