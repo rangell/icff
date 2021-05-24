@@ -97,6 +97,53 @@ def dense_update(full, mask, new):
     return np.concatenate((full[mask], np.array([new])))
 
 
+#def sparse_avg_hac(coo_pw_sim_mat):
+#    """Run hac on a coo sparse matrix of edges.
+#    :param coo_pw_sim_mat: N by N coo matrix w/ pairwise sim matrix
+#    :return: Z - linkage matrix, as in scipy linkage, other meta data from higra
+#    """
+#    ugraph, edge_weights = coo_2_hg(coo_pw_sim_mat)
+#    t, altitudes = hg.binary_partition_tree_average_linkage(ugraph, edge_weights)
+#    Z = hg.binary_hierarchy_to_scipy_linkage_matrix(t, altitudes=altitudes)
+#    return Z, t, altitudes, ugraph, edge_weights
+#
+#
+#def coo_2_hg(coo_mat):
+#    """Convert coo matrix to higra input format."""
+#    rows = coo_mat.row[coo_mat.row < coo_mat.col]
+#    cols = coo_mat.col[coo_mat.row < coo_mat.col]
+#    sims = coo_mat.data[coo_mat.row < coo_mat.col]
+#    dists = sims.max() - sims
+#    ugraph = hg.higram.UndirectedGraph(coo_mat.shape[0])
+#    ugraph.add_edges(rows.tolist(),cols.tolist())
+#    return ugraph, dists.astype(np.float32)
+#
+#
+#def fast_avg_hac_wrapper(opt, transformed_points, idf):
+#
+#    # initialize level set and build agglomerate incompatibility matrix
+#    level_set = transformed_points.astype(float)
+#    agglom_incompat_mx = get_feat_incompat(level_set)
+#    level_set = get_tfidf_normd(
+#        level_set.multiply(level_set > 0), idf
+#    )
+#
+#    # build initial similarity matrix
+#    sim_mx = dot_product_mkl(
+#        level_set, level_set.T, dense=True
+#    )
+#    sim_mx[agglom_incompat_mx] = -np.inf
+#    sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = 0
+#
+#    # build coo matrix for graph
+#    coo = csr_matrix(sim_mx).tocoo()
+#
+#    # run hac
+#    Z, _, _, _, _ = sparse_avg_hac(coo)
+#
+#    return Z
+
+
 def custom_hac(opt,
                raw_points,
                transformed_points,
@@ -161,9 +208,6 @@ def custom_hac(opt,
             agglom_mask[agglom_ind] = True
 
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
-                #agglom_rep = sparse_agglom_rep(
-                #    level_set[agglom_mask]
-                #)
                 if not agglom_incompat_mx[agglom_coord]:
                     agglom_rep = sparse_agglom_rep(
                         level_set[agglom_mask]
@@ -222,13 +266,6 @@ def custom_hac(opt,
         agglom_incompat_mx = np.concatenate(
             (agglom_incompat_mx, merged_agglom_incompat[:,None]), axis=1
         )
-
-        ## compute merged agglom incompat
-        #merged_agglom_incompat = ((sim_mx[agglom_coord[0].item()] == MIN_FLOAT)
-        #            | (sim_mx[agglom_coord[1].item()] == MIN_FLOAT))
-        #merged_agglom_incompat = np.append(
-        #    merged_agglom_incompat[not_agglom_mask], False
-        #)
 
         # update sim_mx
         sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
@@ -714,18 +751,28 @@ def run_mock_icff(opt,
         logger.debug('*** START - Clustering Points ***')
 
         # cluster the points
-        if r == 0:
-            with open('cluster_out_r0.pkl', 'rb') as f:
-                out = pickle.load(f)
-        else:
-            out = cluster_points(opt,
-                                 raw_points,
-                                 transformed_points,
-                                 idf,
-                                 leaf_nodes,
-                                 labels,
-                                 constraints,
-                                 compat_func)
+        out = cluster_points(opt,
+                             raw_points,
+                             transformed_points,
+                             idf,
+                             leaf_nodes,
+                             labels,
+                             constraints,
+                             compat_func)
+
+        #if r == 0:
+        #    with open('cluster_out_r0.pkl', 'rb') as f:
+        #        out = pickle.load(f)
+        #else:
+        #    out = cluster_points(opt,
+        #                         raw_points,
+        #                         transformed_points,
+        #                         idf,
+        #                         leaf_nodes,
+        #                         labels,
+        #                         constraints,
+        #                         compat_func)
+
         pred_canon_ents, pred_labels, pred_tree_nodes, metrics = out
         logger.debug('*** END - Clustering Points ***')
 
@@ -757,17 +804,7 @@ def run_mock_icff(opt,
         if r % iters == 0: 
             logger.debug('*** START - Generating Constraints ***')
             # generate constraints and viable places given predictions
-            #constraints = gen_constraint(
-            #    opt,
-            #    gold_entities,
-            #    pred_canon_ents,
-            #    pred_tree_nodes,
-            #    feat_freq,
-            #    constraints,
-            #    sim_func,
-            #    num_to_generate=opt.num_constraints_per_round
-            #)
-            constraints = gen_constraint_cheat(
+            constraints = gen_constraint(
                 opt,
                 gold_entities,
                 pred_canon_ents,
@@ -776,7 +813,17 @@ def run_mock_icff(opt,
                 constraints,
                 sim_func,
                 num_to_generate=opt.num_constraints_per_round
-            ) 
+            )
+            #constraints = gen_constraint_cheat(
+            #    opt,
+            #    gold_entities,
+            #    pred_canon_ents,
+            #    pred_tree_nodes,
+            #    feat_freq,
+            #    constraints,
+            #    sim_func,
+            #    num_to_generate=opt.num_constraints_per_round
+            #) 
             logger.debug('*** END - Generating Constraints ***')
 
 
@@ -808,9 +855,9 @@ def run_mock_icff(opt,
         #supset_placement_leaves = [n.uid for n in pred_tree_nodes
         #        if set(next_round_sib_lvs).issubset(set([l.uid for l in n.get_leaves()]))]
 
+        #logger.debug('Constraint assignments: {}'.format(placements_out))
         ####
 
-        logger.debug('Constraint assignments: {}'.format(placements_out))
 
         logger.debug('*** START - Projecting Assigned Constraints ***')
         # reset all leaf transformed_rep's

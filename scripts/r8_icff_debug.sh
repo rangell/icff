@@ -12,7 +12,7 @@ python src/icff.py\
     --num_constraints_per_round=20\
     --sim_func='cosine'\
     --compat_func='raw'\
-    --constraint_strength=1\
+    --constraint_strength=10\
     --cluster_obj_reps='raw'\
     --compat_agg='avg'\
     --debug
