@@ -151,15 +151,12 @@ def get_nil_rep(rep_dim=None):
     )
 
 
-def get_constraint_incompat(constraints):
-    incompat_mx = None
-    if len(constraints) > 0:
-        Xi = sp.vstack(constraints)
-        extreme_constraints = copy.deepcopy(Xi)
-        extreme_constraints.data *= np.inf
-        incompat_mx = dot_product_mkl(
-            extreme_constraints, extreme_constraints.T, dense=True
-        )
-        incompat_mx = (incompat_mx == -np.inf) | np.isnan(incompat_mx)
+def get_feat_incompat(vecs):
+    extreme_vecs = copy.deepcopy(vecs)
+    extreme_vecs.data *= np.inf
+    incompat_mx = dot_product_mkl(
+        extreme_vecs, extreme_vecs.T, dense=True
+    )
+    incompat_mx = (incompat_mx == -np.inf) | np.isnan(incompat_mx)
     return incompat_mx
 

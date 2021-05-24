@@ -18,6 +18,7 @@ from scipy.special import log_softmax
 
 from sklearn.metrics import adjusted_rand_score as adj_rand
 from sklearn.metrics import adjusted_mutual_info_score as adj_mi
+from sklearn.preprocessing import normalize
 
 import higra as hg
 from sparse_dot_mkl import dot_product_mkl
@@ -35,7 +36,7 @@ from utils import (MIN_FLOAT,
                    get_tfidf_normd,
                    sparse_agglom_rep,
                    get_nil_rep,
-                   get_constraint_incompat)
+                   get_feat_incompat)
 
 from IPython import embed
 
@@ -108,12 +109,17 @@ def custom_hac(opt,
     num_points = raw_points.shape[0]
     num_constraints = len(constraints)
 
-    # initialize level sets
-    raw_level_set = raw_points.astype(float)
-    transformed_level_set = transformed_points.astype(float)
+    # initialize level set and build agglomerate incompatibility matrix
+    level_set = transformed_points.astype(float)
+    agglom_incompat_mx = get_feat_incompat(level_set)
+    level_set = get_tfidf_normd(
+        level_set.multiply(level_set > 0), idf
+    )
+    level_set_normd = copy.deepcopy(level_set)
+    points_normd = copy.deepcopy(level_set)
 
     # bookkepping
-    Xi = sp.vstack(constraints) if len(constraints) > 0 else None
+    Xi = sp.vstack(constraints) if num_constraints > 0 else None
     uids = np.arange(num_points)
     num_leaves = np.ones_like(uids)
     Z = np.empty((num_points-1, 4))
@@ -125,21 +131,17 @@ def custom_hac(opt,
     intra_cluster_energies = np.ones_like(cluster_ids) * (1 / num_points)
 
     # pre-compute constraint_scores
-    raw_points_normd = get_tfidf_normd(raw_points, idf)
     if num_constraints > 0:
         constraint_scores = compat_func(
-            raw_points_normd,
+            level_set,
             Xi,
             num_points if opt.super_compat_score else 1
         )
         prev_solns = {}
 
     # build initial similarity matrix
-    transformed_level_set_normd = get_tfidf_normd(
-        transformed_level_set.multiply(transformed_level_set > 0), idf
-    )
     sim_mx = dot_product_mkl(
-        transformed_level_set_normd, transformed_level_set_normd.T, dense=True
+        level_set, level_set.T, dense=True
     )
 
     # whether or not we can cut anymore
@@ -147,7 +149,7 @@ def custom_hac(opt,
 
     for r in trange(num_points-1):
         # ignore diag
-        sim_mx[tuple([np.arange(transformed_level_set.shape[0])]*2)] = -np.inf
+        sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf
 
         # get next agglomeration
         while True:
@@ -159,21 +161,17 @@ def custom_hac(opt,
             agglom_mask[agglom_ind] = True
 
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
-                try:
-                    transformed_agglom_rep = sparse_agglom_rep(
-                        transformed_level_set[agglom_mask]
+                if not agglom_incompat_mx[agglom_coord]:
+                    agglom_rep = sparse_agglom_rep(
+                        level_set[agglom_mask]
                     )
-                    raw_agglom_rep = sparse_agglom_rep(
-                        raw_level_set[agglom_mask]
-                    )
-                except InvalidAgglomError:
+                else:
                     sim_mx[agglom_coord] = MIN_FLOAT
                     continue
             else:
-                transformed_agglom_rep = get_nil_rep(
+                agglom_rep = get_nil_rep(
                     rep_dim=transformed_level_set.shape[1]
                 )
-                raw_agglom_rep = get_nil_rep(rep_dim=raw_level_set.shape[1])
             break
             
         # sanity check
@@ -192,23 +190,15 @@ def custom_hac(opt,
              float(agglom_num_leaves)]
         )
 
-        # get tfidf vectors for agglom reps
-        transformed_agglom_rep_normd = get_tfidf_normd(
-            transformed_agglom_rep.multiply(transformed_agglom_rep > 0), idf
-        )
-        raw_agglom_rep_normd = get_tfidf_normd(raw_agglom_rep, idf)
-
         # update level sets
-        transformed_level_set = sparse_update(
-            transformed_level_set, not_agglom_mask, transformed_agglom_rep
+        level_set = sparse_update(
+            level_set, not_agglom_mask, agglom_rep
         )
-        raw_level_set = sparse_update(
-            raw_level_set, not_agglom_mask, raw_agglom_rep
+        agglom_rep_normd = normalize(
+            agglom_rep / agglom_num_leaves, norm='l2', axis=1
         )
-        transformed_level_set_normd = sparse_update(
-            transformed_level_set_normd,
-            not_agglom_mask,
-            transformed_agglom_rep_normd
+        level_set_normd = sparse_update(
+            level_set_normd, not_agglom_mask, agglom_rep_normd
         )
 
         # update sim_mx
@@ -219,8 +209,8 @@ def custom_hac(opt,
             (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
         )
         new_sims = dot_product_mkl(
-            transformed_level_set_normd,
-            transformed_agglom_rep_normd.T,
+            level_set_normd,
+            agglom_rep_normd.T,
             dense=True
         )
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
@@ -234,7 +224,9 @@ def custom_hac(opt,
         uids = dense_update(uids, not_agglom_mask, next_uid)
 
         # update num_leaves list
-        num_leaves = dense_update(num_leaves, not_agglom_mask, agglom_num_leaves)
+        num_leaves = dense_update(
+            num_leaves, not_agglom_mask, agglom_num_leaves
+        )
 
         # don't need to evaluate cut because constraints cannot be satisfied
         invalid_cut = invalid_cut or (linkage_score <= MIN_FLOAT)
@@ -244,8 +236,8 @@ def custom_hac(opt,
         # update intra cluster energies
         agglom_energy = np.sum(
             dot_product_mkl(
-                raw_points_normd[new_cluster_mask],
-                raw_agglom_rep_normd.T,
+                points_normd[new_cluster_mask],
+                agglom_rep_normd.T,
                 dense=True
             )
         )
@@ -258,7 +250,7 @@ def custom_hac(opt,
         assign_score = 0
         if num_constraints > 0:
             new_constraint_scores = compat_func(
-                raw_agglom_rep_normd,
+                agglom_rep_normd,
                 Xi,
                 num_points if opt.super_compat_score else 1
             )
@@ -298,7 +290,7 @@ def custom_hac(opt,
                   - (opt.cost_per_cluster * intra_cluster_energies.size)\
                   + assign_score
 
-        if raw_level_set.shape[0] == 1:
+        if level_set.shape[0] == 1: # don't allow cut at 1 cluster
             continue
 
         if cut_score >= best_cut_score:
@@ -309,7 +301,7 @@ def custom_hac(opt,
             best_cut = copy.deepcopy(uids)
 
     # sanity check
-    assert raw_level_set.shape[0] == 1 and transformed_level_set.shape[0] == 1
+    assert level_set.shape[0] == 1
 
     return Z, best_cut, best_cut_score
 
@@ -328,7 +320,10 @@ def cluster_points(opt,
     num_constraints = len(constraints)
 
     # compute constraint incompatibility matrix
-    incompat_mx = get_constraint_incompat(constraints)
+    if len(constraints) > 0:
+        incompat_mx = get_feat_incompat(sp.vstack(constraints))
+    else:
+        incompat_mx = None
 
     # run clustering and produce the linkage matrix
     Z, best_cut, cut_obj_score = custom_hac(
