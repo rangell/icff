@@ -143,13 +143,13 @@ def custom_hac(opt,
     sim_mx = dot_product_mkl(
         level_set, level_set.T, dense=True
     )
+    sim_mx[agglom_incompat_mx] = MIN_FLOAT
+    sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf
 
     # whether or not we can cut anymore
     invalid_cut = False
 
     for r in trange(num_points-1):
-        # ignore diag
-        sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf
 
         # get next agglomeration
         while True:
@@ -161,6 +161,9 @@ def custom_hac(opt,
             agglom_mask[agglom_ind] = True
 
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
+                #agglom_rep = sparse_agglom_rep(
+                #    level_set[agglom_mask]
+                #)
                 if not agglom_incompat_mx[agglom_coord]:
                     agglom_rep = sparse_agglom_rep(
                         level_set[agglom_mask]
@@ -220,18 +223,25 @@ def custom_hac(opt,
             (agglom_incompat_mx, merged_agglom_incompat[:,None]), axis=1
         )
 
+        ## compute merged agglom incompat
+        #merged_agglom_incompat = ((sim_mx[agglom_coord[0].item()] == MIN_FLOAT)
+        #            | (sim_mx[agglom_coord[1].item()] == MIN_FLOAT))
+        #merged_agglom_incompat = np.append(
+        #    merged_agglom_incompat[not_agglom_mask], False
+        #)
+
         # update sim_mx
         sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
         sim_mx = sim_mx.reshape(num_untouched, num_untouched)
-        sim_mx = np.concatenate(
-            (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
-        )
         new_sims = dot_product_mkl(
             level_set_normd,
             agglom_rep_normd.T,
             dense=True
         )
+        #new_sims[merged_agglom_incompat[:,None]] = MIN_FLOAT
+        sim_mx = np.concatenate((sim_mx, new_sims[:-1].T), axis=0)
         sim_mx = np.concatenate((sim_mx, new_sims), axis=1)
+        sim_mx[num_untouched, num_untouched] = -np.inf # ignore diag
 
         # update cluster_ids
         next_uid = np.max(uids) + 1
@@ -436,8 +446,6 @@ def gen_constraint_cheat(opt,
                          constraints,
                          sim_func,
                          num_to_generate=1):
-
-    assert num_to_generate == 1
 
     # maximally pure mergers
     maximally_pure_mergers = [n for n in pred_tree_nodes
@@ -779,6 +787,9 @@ def run_mock_icff(opt,
         viable_placements = constraint_compatible_nodes(
             opt, pred_tree_nodes, idf, constraints, compat_func, num_points
         )
+
+        # TODO: filter viable placements
+
         logger.debug('*** END - Computing Viable Placements ***')
 
         logger.debug('*** START - Assigning Constraints ***')
@@ -835,8 +846,8 @@ def run_mock_icff(opt,
             # clamp agglom constraints
             agglom_constraints[agglom_constraints < -1] = -1
             agglom_constraints[agglom_constraints > 1] = 1
-            reps = [pred_tree_nodes[nuid].transformed_rep, agglom_constraints]
-            pred_tree_nodes[nuid].transformed_rep = sparse_agglom_rep(
+            reps = [leaf_nodes[nuid].transformed_rep, agglom_constraints]
+            leaf_nodes[nuid].transformed_rep = sparse_agglom_rep(
                 sp.vstack(reps)
             )
 
