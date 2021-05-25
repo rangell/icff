@@ -97,53 +97,6 @@ def dense_update(full, mask, new):
     return np.concatenate((full[mask], np.array([new])))
 
 
-#def sparse_avg_hac(coo_pw_sim_mat):
-#    """Run hac on a coo sparse matrix of edges.
-#    :param coo_pw_sim_mat: N by N coo matrix w/ pairwise sim matrix
-#    :return: Z - linkage matrix, as in scipy linkage, other meta data from higra
-#    """
-#    ugraph, edge_weights = coo_2_hg(coo_pw_sim_mat)
-#    t, altitudes = hg.binary_partition_tree_average_linkage(ugraph, edge_weights)
-#    Z = hg.binary_hierarchy_to_scipy_linkage_matrix(t, altitudes=altitudes)
-#    return Z, t, altitudes, ugraph, edge_weights
-#
-#
-#def coo_2_hg(coo_mat):
-#    """Convert coo matrix to higra input format."""
-#    rows = coo_mat.row[coo_mat.row < coo_mat.col]
-#    cols = coo_mat.col[coo_mat.row < coo_mat.col]
-#    sims = coo_mat.data[coo_mat.row < coo_mat.col]
-#    dists = sims.max() - sims
-#    ugraph = hg.higram.UndirectedGraph(coo_mat.shape[0])
-#    ugraph.add_edges(rows.tolist(),cols.tolist())
-#    return ugraph, dists.astype(np.float32)
-#
-#
-#def fast_avg_hac_wrapper(opt, transformed_points, idf):
-#
-#    # initialize level set and build agglomerate incompatibility matrix
-#    level_set = transformed_points.astype(float)
-#    agglom_incompat_mx = get_feat_incompat(level_set)
-#    level_set = get_tfidf_normd(
-#        level_set.multiply(level_set > 0), idf
-#    )
-#
-#    # build initial similarity matrix
-#    sim_mx = dot_product_mkl(
-#        level_set, level_set.T, dense=True
-#    )
-#    sim_mx[agglom_incompat_mx] = -np.inf
-#    sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = 0
-#
-#    # build coo matrix for graph
-#    coo = csr_matrix(sim_mx).tocoo()
-#
-#    # run hac
-#    Z, _, _, _, _ = sparse_avg_hac(coo)
-#
-#    return Z
-
-
 def custom_hac(opt,
                raw_points,
                transformed_points,
@@ -485,71 +438,6 @@ def cluster_points(opt,
     return pred_canon_ents, pred_labels, pred_tree_nodes, metrics
 
 
-def gen_constraint_cheat(opt,
-                         gold_entities,
-                         pred_canon_ents,
-                         pred_tree_nodes,
-                         feat_freq,
-                         constraints,
-                         sim_func,
-                         num_to_generate=1):
-
-    # maximally pure mergers
-    maximally_pure_mergers = [n for n in pred_tree_nodes
-            if n.label is not None and n.parent.label is None]
-    random.shuffle(maximally_pure_mergers)
-
-    logger.debug('tgt pm {} - num leaves: {}'.format(
-            maximally_pure_mergers[0].uid,
-            len(maximally_pure_mergers[0].get_leaves())
-        )
-    )
-
-    pure_merger_iter = iter(maximally_pure_mergers)
-
-    # create constraints using maximally pure mergers
-    num_gen_constraints = 0
-    while num_gen_constraints < num_to_generate:
-        pure_merger = next(pure_merger_iter)
-        gold_ent_rep = gold_entities[pure_merger.label]
-
-        pm_transformed_rep = (pure_merger.transformed_rep > 0).astype(float)
-        par_transformed_rep = (pure_merger.parent.transformed_rep > 0).astype(float)
-
-        neg_feats = ((par_transformed_rep - gold_ent_rep) > 0).astype(float)
-        pos_feats = ((gold_ent_rep - pm_transformed_rep) > 0).astype(float)
-
-        if pos_feats.tocoo().col.size == 0:
-            continue
-
-        logger.debug('Generating constraint for node: {}'.format(pure_merger.uid))
-
-        num_pos = 1
-
-        in_idxs = pm_transformed_rep.tocoo().col
-        pos_idxs = np.random.choice(pos_feats.tocoo().col, size=(num_pos,))
-        #neg_idxs = np.random.choice(neg_feats.tocoo().col, size=(1,))
-        neg_idxs = neg_feats.tocoo().col
-
-        constraint_cols = np.concatenate((pos_idxs, in_idxs, neg_idxs), axis=0)
-        constraint_data = np.array(
-            [1] * (pos_idxs.size + in_idxs.size) + [-1] * neg_idxs.size
-        ).astype(float)
-        constraint_rows = np.zeros_like(constraint_cols)
-
-        new_constraint = csr_matrix(
-            (constraint_data, (constraint_rows, constraint_cols)),
-            shape=gold_ent_rep.shape,
-            dtype=float
-        )
-
-        constraints.append(new_constraint)
-
-        num_gen_constraints += 1
-
-    return constraints
-
-
 def gen_constraint(opt,
                    gold_entities,
                    pred_canon_ents,
@@ -599,8 +487,7 @@ def gen_constraint(opt,
                 )
                 pos_idxs = np.random.choice(
                     pos_pred_domain,
-                    #size=min(opt.constraint_strength, pos_pred_domain.size),
-                    size=1,
+                    size=min(opt.constraint_strength, pos_pred_domain.size),
                     replace=False,
                     p=pos_feat_dist
                 )
@@ -650,10 +537,9 @@ def gen_constraint(opt,
                 )
             neg_idxs = np.random.choice(
                 neg_pred_domain,
-                #size=min([opt.constraint_strength,
-                #          neg_pred_domain.size,
-                #          np.sum(neg_feat_dist > 0)]),
-                size=1,
+                size=min([opt.constraint_strength,
+                          neg_pred_domain.size,
+                          np.sum(neg_feat_dist > 0)]),
                 replace=False,
                 p=neg_feat_dist
             )
