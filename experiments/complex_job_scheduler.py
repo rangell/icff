@@ -25,13 +25,15 @@ def get_run_id():
         run_id = len(expts) / 5
     return run_id
 
-top_details = 'Grid search over cost_per_cluster, num_constraints_per_round, and constraint_strength  (with super_compat_score=off)'
+top_details = 'Initial runs of icff over all trimmed datasets'
 
 hyperparameters = [
-    [('cost_per_cluster',), ['1e-3','8e-4']],
-    [('num_constraints_per_round',), ['5','10','25']],
-    [('constraint_strength',), ['3','7','10','15']],
-    [('compat_agg',), ['avg']],
+    [('seed',), ['27']],
+    [('data_file',), ['r8-test-stemmed.dataset.trimmed.pkl',
+                      'r52-test-stemmed.dataset.trimmed.pkl',
+                      'cade-test-stemmed.dataset.trimmed.pkl',
+                      'webkb-test-stemmed.dataset.trimmed.pkl',
+                      '20ng-test-stemmed.dataset.trimmed.pkl']],
 ]
 
 run_id = int(get_run_id())
@@ -42,7 +44,7 @@ combinations = list(itertools.product(*value_hyperparameters))
 scripts = []
 
 for combo in combinations:
-    with open("r8_icff_grid_template.sh", 'r') as f:
+    with open("icff_grid_template.sh", 'r') as f:
         train_script = f.read()
 
     combo = {k[0]: v for (k, v) in zip(key_hyperparameters, combo)}
