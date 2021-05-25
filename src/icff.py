@@ -156,14 +156,15 @@ def custom_hac(opt,
     num_points = raw_points.shape[0]
     num_constraints = len(constraints)
 
-    # initialize level set and build agglomerate incompatibility matrix
-    level_set = transformed_points.astype(float)
-    agglom_incompat_mx = get_feat_incompat(level_set)
-    level_set = get_tfidf_normd(
-        level_set.multiply(level_set > 0), idf
+    # initialize level sets and build agglomerate incompatibility matrix
+    raw_level_set = get_tfidf_normd(raw_points.astype(float), idf)
+    raw_points_normd = copy.deepcopy(raw_level_set)
+    transformed_level_set = transformed_points.astype(float)
+    agglom_incompat_mx = get_feat_incompat(transformed_level_set)
+    transformed_level_set = get_tfidf_normd(
+        transformed_level_set.multiply(transformed_level_set > 0), idf
     )
-    level_set_normd = copy.deepcopy(level_set)
-    points_normd = copy.deepcopy(level_set)
+    transformed_level_set_normd = copy.deepcopy(transformed_level_set)
 
     # bookkepping
     Xi = sp.vstack(constraints) if num_constraints > 0 else None
@@ -180,7 +181,7 @@ def custom_hac(opt,
     # pre-compute constraint_scores
     if num_constraints > 0:
         constraint_scores = compat_func(
-            level_set,
+            raw_level_set,
             Xi,
             num_points if opt.super_compat_score else 1
         )
@@ -188,10 +189,10 @@ def custom_hac(opt,
 
     # build initial similarity matrix
     sim_mx = dot_product_mkl(
-        level_set, level_set.T, dense=True
+        transformed_level_set, transformed_level_set.T, dense=True
     )
     sim_mx[agglom_incompat_mx] = MIN_FLOAT
-    sim_mx[tuple([np.arange(level_set.shape[0])]*2)] = -np.inf
+    sim_mx[tuple([np.arange(transformed_level_set.shape[0])]*2)] = -np.inf
 
     # whether or not we can cut anymore
     invalid_cut = False
@@ -209,15 +210,18 @@ def custom_hac(opt,
 
             if sim_mx[agglom_coord].item() > MIN_FLOAT:
                 if not agglom_incompat_mx[agglom_coord]:
-                    agglom_rep = sparse_agglom_rep(
-                        level_set[agglom_mask]
+                    raw_agglom_rep = sparse_agglom_rep(
+                        raw_level_set[agglom_mask]
+                    )
+                    transformed_agglom_rep = sparse_agglom_rep(
+                        transformed_level_set[agglom_mask]
                     )
                 else:
                     sim_mx[agglom_coord] = MIN_FLOAT
                     continue
             else:
-                agglom_rep = get_nil_rep(
-                    rep_dim=level_set.shape[1]
+                transformed_agglom_rep = get_nil_rep(
+                    rep_dim=transformed_level_set.shape[1]
                 )
             break
             
@@ -239,14 +243,20 @@ def custom_hac(opt,
         )
 
         # update level sets
-        level_set = sparse_update(
-            level_set, not_agglom_mask, agglom_rep
+        raw_level_set = sparse_update(
+            raw_level_set, not_agglom_mask, raw_agglom_rep
         )
-        agglom_rep_normd = normalize(
-            agglom_rep / agglom_num_leaves, norm='l2', axis=1
+        raw_agglom_rep_normd = normalize(
+            raw_agglom_rep / agglom_num_leaves, norm='l2', axis=1
         )
-        level_set_normd = sparse_update(
-            level_set_normd, not_agglom_mask, agglom_rep_normd
+        transformed_level_set = sparse_update(
+            transformed_level_set, not_agglom_mask, transformed_agglom_rep
+        )
+        transformed_agglom_rep_normd = normalize(
+            transformed_agglom_rep / agglom_num_leaves, norm='l2', axis=1
+        )
+        transformed_level_set_normd = sparse_update(
+            transformed_level_set_normd, not_agglom_mask, transformed_agglom_rep_normd
         )
 
         # update agglom_incompat_mx
@@ -271,8 +281,8 @@ def custom_hac(opt,
         sim_mx = sim_mx[not_agglom_mask[:,None] & not_agglom_mask[None,:]]
         sim_mx = sim_mx.reshape(num_untouched, num_untouched)
         new_sims = dot_product_mkl(
-            level_set_normd,
-            agglom_rep_normd.T,
+            transformed_level_set_normd,
+            transformed_agglom_rep_normd.T,
             dense=True
         )
         #new_sims[merged_agglom_incompat[:,None]] = MIN_FLOAT
@@ -301,8 +311,8 @@ def custom_hac(opt,
         # update intra cluster energies
         agglom_energy = np.sum(
             dot_product_mkl(
-                points_normd[new_cluster_mask],
-                agglom_rep_normd.T,
+                raw_points_normd[new_cluster_mask],
+                raw_agglom_rep_normd.T,
                 dense=True
             )
         )
@@ -311,11 +321,11 @@ def custom_hac(opt,
             intra_cluster_energies, not_agglom_mask, agglom_energy
         )
 
-        # compute best assignment of constraints to level_set
+        # compute best assignment of constraints to transformed_level_set
         assign_score = 0
         if num_constraints > 0:
             new_constraint_scores = compat_func(
-                agglom_rep_normd,
+                raw_agglom_rep_normd,
                 Xi,
                 num_points if opt.super_compat_score else 1
             )
@@ -355,7 +365,7 @@ def custom_hac(opt,
                   - (opt.cost_per_cluster * intra_cluster_energies.size)\
                   + assign_score
 
-        if level_set.shape[0] == 1: # don't allow cut at 1 cluster
+        if transformed_level_set.shape[0] == 1: # don't allow cut at 1 cluster
             continue
 
         if cut_score >= best_cut_score:
@@ -366,7 +376,7 @@ def custom_hac(opt,
             best_cut = copy.deepcopy(uids)
 
     # sanity check
-    assert level_set.shape[0] == 1
+    assert transformed_level_set.shape[0] == 1
 
     return Z, best_cut, best_cut_score
 
@@ -1032,9 +1042,9 @@ def main():
             with open(data_fname, 'rb') as f:
                 gold_entities, mentions, mention_labels = pickle.load(f)
 
-    ## drop empty columns from mentions and entities
-    #gold_entities = drop_empty_columns(gold_entities)
-    #mentions = drop_empty_columns(mentions)
+    # drop empty columns from mentions and entities
+    gold_entities = drop_empty_columns(gold_entities)
+    mentions = drop_empty_columns(mentions)
 
     # declare similarity and compatibility functions with function pointers
     assert opt.sim_func == 'cosine' # TODO: support more sim funcs
