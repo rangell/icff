@@ -488,7 +488,8 @@ def gen_constraint(opt,
                 )
                 pos_idxs = np.random.choice(
                     pos_pred_domain,
-                    size=min(opt.constraint_strength, pos_pred_domain.size),
+                    #size=min(opt.constraint_strength, pos_pred_domain.size),
+                    size=1,
                     replace=False,
                     p=pos_feat_dist
                 )
@@ -538,9 +539,10 @@ def gen_constraint(opt,
                 )
             neg_idxs = np.random.choice(
                 neg_pred_domain,
-                size=min([opt.constraint_strength,
-                          neg_pred_domain.size,
-                          np.sum(neg_feat_dist > 0)]),
+                #size=min([opt.constraint_strength,
+                #          neg_pred_domain.size,
+                #          np.sum(neg_feat_dist > 0)]),
+                size=1,
                 replace=False,
                 p=neg_feat_dist
             )
