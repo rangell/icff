@@ -93,6 +93,7 @@ def greedy_level_set_assign(viable_placements, incompat_mx):
 def sparse_update(full, mask, new):
     return sp.vstack((full[mask], new))
 
+
 def dense_update(full, mask, new):
     return np.concatenate((full[mask], np.array([new])))
 

@@ -26,11 +26,14 @@ import higra as hg
 
 from compat_func import raw_overlap, transformed_overlap
 from data import gen_data
-from match import match_constraints, lca_check, viable_match_check
 from sim_func import dot_prod, jaccard_sim, cos_sim
 from tree_ops import constraint_compatible_nodes
 from tree_node import TreeNode
-from utils import MIN_FLOAT, initialize_exp, sparse_agglom_rep, get_nil_rep
+from utils import (MIN_FLOAT,
+                   initialize_exp,
+                   sparse_agglom_rep,
+                   get_nil_rep,
+                   get_tfidf_normd)
 
 from IPython import embed
 
@@ -38,16 +41,20 @@ from IPython import embed
 logger = logging.getLogger(__name__)
 
 
-def custom_hac(points, sim_func, constraints):
-    # FIXME: sim_func is unused
+def dense_update(full, mask, new):
+    return np.concatenate((full[mask], np.array([new])))
 
+
+def custom_hac(opt, points, constraints):
+    num_points = points.shape[0]
     level_set = points.astype(float)
     Z = []
 
     uids = np.arange(level_set.shape[0])
     num_leaves = np.ones_like(uids)
 
-    level_set_normd = normalize(level_set, norm='l2', axis=1)
+    level_set_normd = copy.deepcopy(level_set)
+    points_normd = copy.deepcopy(level_set)
     sim_mx = dot_product_mkl(level_set_normd, level_set_normd.T, dense=True)
 
     set_union = list(range(points.shape[0]))
@@ -59,6 +66,12 @@ def custom_hac(points, sim_func, constraints):
     cannot_link_idxs = tuple(np.array(l) for l in zip(*cannot_link_pairs))
     if len(cannot_link_pairs) > 0:
         sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
+
+    # for computing best cut
+    best_cut_score = MIN_FLOAT
+    best_cut = copy.deepcopy(uids)
+    cluster_ids = np.arange(num_points)
+    intra_cluster_energies = np.ones_like(cluster_ids) * (1 / num_points)
  
     for _ in trange(level_set.shape[0] - 1):
 
@@ -124,7 +137,9 @@ def custom_hac(points, sim_func, constraints):
         sim_mx = np.concatenate(
             (sim_mx, np.ones((1, num_untouched)) * -np.inf), axis=0
         )
-        agglom_rep_normd = normalize(agglom_rep, norm='l2', axis=1)
+        agglom_rep_normd = normalize(
+            agglom_rep / agglom_num_leaves, norm='l2', axis=1
+        )
         level_set_normd = sp.vstack(
             (level_set_normd[not_agglom_mask], agglom_rep_normd)
         )
@@ -135,6 +150,8 @@ def custom_hac(points, sim_func, constraints):
 
         # update set union
         next_uid = np.max(uids) + 1
+        new_cluster_mask = np.isin(cluster_ids, uids[agglom_mask])
+        cluster_ids[new_cluster_mask] = next_uid
         assert next_uid == len(set_union)
         set_union.append(next_uid)
         for agglom_idx in agglom_ind:
@@ -162,118 +179,43 @@ def custom_hac(points, sim_func, constraints):
 
             sim_mx[cannot_link_idxs] = MIN_FLOAT # don't choose these if we can avoid it
 
+        # update intra cluster energies
+        agglom_energy = np.sum(
+            dot_product_mkl(
+                points_normd[new_cluster_mask],
+                agglom_rep_normd.T,
+                dense=True
+            )
+        )
+        agglom_energy /= num_points
+        intra_cluster_energies = dense_update(
+            intra_cluster_energies, not_agglom_mask, agglom_energy
+        )
+
+        cut_score = np.sum(intra_cluster_energies)\
+                    - (opt.cost_per_cluster * intra_cluster_energies.size)
+
+        if level_set.shape[0] == 1: # don't allow cut at 1 cluster
+            continue
+
+        if linkage_score <= MIN_FLOAT: # don't compute cut score of cannot-link
+            continue
+
+        if forced_mergers_left: # reset best while there are still forced_mergers_left (this works!)
+            best_cut_score = MIN_FLOAT
+            best_cut = copy.deepcopy(uids)
+
+        if cut_score >= best_cut_score:
+            best_cut_score = cut_score
+            best_cut = copy.deepcopy(uids)
+
     # sanity check
     assert level_set.shape[0] == 1
 
     # return the linkage matrix
     Z = np.vstack(Z)
 
-    return Z
-
-
-def intra_subcluster_energy(opt, subcluster, sim_func, num_points):
-    subcluster_leaves = subcluster.get_leaves()
-    assert len(subcluster_leaves) > 0
-
-    if opt.cluster_obj_reps == 'raw':
-        reps = sp.vstack([n.raw_rep for n in subcluster_leaves])
-    else:
-        assert opt.cluster_obj_reps == 'transformed'
-        reps = sp.vstack([n.transformed_rep for n in subcluster_leaves])
-
-    canon_rep = sparse_agglom_rep(reps)
-    canon_rep_normd = normalize(canon_rep, norm='l2', axis=1)
-    reps_normd = normalize(reps, norm='l2', axis=1)
-    rep_affinities = dot_product_mkl(reps_normd, canon_rep_normd.T, dense=True)
-    return np.sum(rep_affinities) / num_points
-
-
-def constraint_satisfaction(opt, leaf_uids, constraints):
-    for p, a, b in constraints:
-        pair = set([a, b])
-        if pair.isdisjoint(leaf_uids):
-            continue
-        if p == np.inf and not pair.issubset(leaf_uids): # must-link
-            return False
-        elif p == -np.inf and pair.issubset(leaf_uids): # shouldn't-link
-            return False
-    return True
-
-
-def value_node(opt,
-               node,
-               sim_func,
-               constraints,
-               cost_per_cluster,
-               num_points):
-
-    # compute raw materials
-    leaf_uids = set([x.uid for x in node.get_leaves()])
-    satisfied = constraint_satisfaction(opt, leaf_uids, constraints)
-    if not satisfied:
-        intra_energy = -np.inf
-    else:
-        intra_energy = intra_subcluster_energy(opt, node, sim_func, num_points)
-        intra_energy -= cost_per_cluster
-
-    return (intra_energy, [node])
-
-
-def memoize_subcluster(opt,
-                       node,
-                       sim_func,
-                       constraints,
-                       cost_per_cluster,
-                       num_points):
-
-    node_cut = value_node(
-        opt,
-        node,
-        sim_func,
-        constraints,
-        cost_per_cluster,
-        num_points,
-    )
-
-    best_cut = node_cut
-    if len(node.children) > 0:
-        best_child_cuts = [memoize_subcluster(opt,
-                                              c, 
-                                              sim_func,
-                                              constraints,
-                                              cost_per_cluster,
-                                              num_points)
-                                for c in node.children]
-        assert len(best_child_cuts) == 2 # restrict to binary trees for now
-
-        agg_child_cut_score = sum([cut[0] for cut in best_child_cuts])
-        if agg_child_cut_score > node_cut[0]:
-            best_cut = (agg_child_cut_score,
-                        [s for cut in best_child_cuts for s in cut[1]])
-
-    return best_cut
-        
-
-def get_opt_tree_cut(opt,
-                     pred_tree_nodes,
-                     sim_func,
-                     constraints,
-                     cost_per_cluster,
-                     num_points,
-                     num_constraints):
-
-    # recursively compute value map of root node
-    assert pred_tree_nodes[-1].parent is None
-    max_cut_score, max_cut = memoize_subcluster(
-        opt,
-        pred_tree_nodes[-1],
-        sim_func,
-        constraints,
-        cost_per_cluster,
-        num_points
-    )
-
-    return max_cut, max_cut_score
+    return Z, best_cut, best_cut_score
 
 
 def cluster_points(opt,
@@ -288,7 +230,7 @@ def cluster_points(opt,
     num_constraints = len(constraints)
 
     # run clustering and produce the linkage matrix
-    Z = custom_hac(points, sim_func, constraints)
+    Z, best_cut, cut_obj_score = custom_hac(opt, points, constraints)
 
     # build the tree
     pred_tree_nodes = copy.copy(leaf_nodes) # shallow copy on purpose!
@@ -324,20 +266,16 @@ def cluster_points(opt,
         )
         new_node_id += 1
 
-    # find the best cut
-    cut_frontier_nodes, cut_obj_score = get_opt_tree_cut(
-        opt,
-        pred_tree_nodes,
-        sim_func,
-        constraints,
-        cost_per_cluster,
-        num_points,
-        num_constraints
-    )
+    # maximally pure mergers
+    maximally_pure_mergers = [n for n in pred_tree_nodes
+            if n.label is not None and n.parent.label is None]
+
+    # extract cut frontier
+    cut_frontier_nodes = [pred_tree_nodes[i] for i in best_cut]
 
     # the predicted entities canonicalization
     pred_canon_ents = sp.vstack(
-        [n.raw_rep for n in cut_frontier_nodes]
+        [n.raw_rep.astype(bool).astype(float) for n in cut_frontier_nodes]
     )
 
     # produce the predicted labels for leaves
@@ -357,9 +295,11 @@ def cluster_points(opt,
     adj_mut_info = adj_mi(pred_labels, labels)
 
     metrics = {
-        'pred_k' : len(cut_frontier_nodes),
+        '# constraints': len(constraints),
         'fits' : fits,
+        'pred_k' : len(cut_frontier_nodes),
         'dp' : round(dp, 4),
+        '# maximally_pure_mergers' : len(maximally_pure_mergers),
         'adj_rand_idx' : round(adj_rand_idx, 4),
         'adj_mut_info' : round(adj_mut_info, 4),
         'cut_obj_score' : round(cut_obj_score, 4)
@@ -395,6 +335,12 @@ def gen_constraint(opt,
     return constraints
 
 
+def compute_idf(points):
+    num_points = points.shape[0]
+    doc_freq = np.sum(points.astype(bool).astype(int), axis=0)
+    return np.log((num_points + 1) / (doc_freq + 1)) + 1
+
+
 def run_mock_ml_sl(opt,
                    gold_entities,
                    mentions,
@@ -403,8 +349,12 @@ def run_mock_ml_sl(opt,
     num_points = mentions.shape[0]
     constraints = []
 
+    idf = compute_idf(mentions)
+    mentions_normd = get_tfidf_normd(mentions, idf)
+
     # construct tree node objects for leaves
-    leaves = [TreeNode(i, m_rep) for i, m_rep in enumerate(mentions)]
+    leaves = [TreeNode(i, m_rep, label=lbl)
+        for i, (m_rep, lbl) in enumerate(zip(mentions_normd, mention_labels))]
 
 	## TESTING: generate some fake constraints
     #pos_idxs = np.where((mention_labels[:, None] == mention_labels[None, :]) ^ np.eye(mention_labels.size).astype(bool))
@@ -454,9 +404,6 @@ def run_mock_ml_sl(opt,
 
             ## NOTE: JUST FOR TESTING
             #constraints = [(2*ent - 1) for ent in gold_entities]
-
-    embed()
-    exit()
 
 
 
@@ -535,6 +482,12 @@ def set_sim_func(opt):
     return sim_func
 
 
+def drop_empty_columns(csr_mx):
+    csc_mx = csr_mx.tocsc()
+    csc_mx = csc_mx[:, np.diff(csc_mx.indptr) != 0]
+    return csc_mx.tocsr()
+
+
 def main():
     # get command line options
     opt = get_opt()
@@ -564,6 +517,10 @@ def main():
         else:
             with open(data_fname, 'rb') as f:
                 gold_entities, mentions, mention_labels = pickle.load(f)
+
+    # drop empty columns from mentions and entities
+    gold_entities = drop_empty_columns(gold_entities)
+    mentions = drop_empty_columns(mentions)
 
     # declare similarity and compatibility functions with function pointers
     assert opt.sim_func == 'cosine' # TODO: support more sim funcs
