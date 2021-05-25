@@ -25,7 +25,7 @@ def get_run_id():
         run_id = len(expts) / 5
     return run_id
 
-top_details = 'Initial runs of icff over all trimmed datasets'
+top_details = 'Initial runs of ml_sl over all trimmed datasets'
 
 hyperparameters = [
     [('seed',), ['27']],
@@ -44,7 +44,7 @@ combinations = list(itertools.product(*value_hyperparameters))
 scripts = []
 
 for combo in combinations:
-    with open("icff_grid_template.sh", 'r') as f:
+    with open("ml_sl_grid_template.sh", 'r') as f:
         train_script = f.read()
 
     combo = {k[0]: v for (k, v) in zip(key_hyperparameters, combo)}
