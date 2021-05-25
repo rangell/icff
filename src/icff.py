@@ -907,10 +907,6 @@ def run_mock_icff(opt,
 
         logger.debug('*** END - Projecting Assigned Constraints ***')
 
-    embed()
-    exit()
-
-
 
 def get_opt():
 
