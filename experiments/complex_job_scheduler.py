@@ -29,11 +29,12 @@ top_details = 'Initial runs of ml_sl over all trimmed datasets'
 
 hyperparameters = [
     [('seed',), ['27']],
-    [('data_file',), ['r8-test-stemmed.dataset.trimmed.pkl',
-                      'r52-test-stemmed.dataset.trimmed.pkl',
-                      'cade-test-stemmed.dataset.trimmed.pkl',
-                      'webkb-test-stemmed.dataset.trimmed.pkl',
-                      '20ng-test-stemmed.dataset.trimmed.pkl']],
+    [('data_file',), ['r8-test-stemmed.dataset.pkl',
+                      'r52-test-stemmed.dataset.pkl',
+                      'cade-test-stemmed.dataset.pkl',
+                      'webkb-test-stemmed.dataset.pkl',
+                      '20ng-test-stemmed.dataset.pkl']],
+    #[('constraint_strength',), ['5']]
 ]
 
 run_id = int(get_run_id())
