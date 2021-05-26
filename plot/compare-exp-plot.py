@@ -5,8 +5,18 @@ import re
 import json
 from collections import defaultdict
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from IPython import embed
 
+
+sns.set_theme(style="darkgrid")
+
+
+uniq = lambda x : list(set(x))
 
 
 def parse_log(fname, parsed_data):
@@ -62,5 +72,29 @@ for fname in log_fnames:
 
 parsed_data = dict(parsed_data)
 
-embed()
-exit()
+dp_df = pd.DataFrame(
+    parsed_data, columns=['dataset', 'method', '#constraints', 'dp']
+)
+
+#r8_dp_df = dp_df.query("dataset == 'r8-test-stemmed.dataset'")
+#r52_dp_df = dp_df.query("dataset == 'r52-test-stemmed.dataset'")
+#webkb_dp_df = dp_df.query("dataset == 'webkb-test-stemmed.dataset'")
+#ng20_dp_df = dp_df.query("dataset == '20ng-test-stemmed.dataset'")
+#jones_s_dp_df = dp_df.query("dataset =='rexa-jones_s'")
+#allen_d_dp_df = dp_df.query("dataset =='rexa-allen_d'")
+#young_s_dp_df = dp_df.query("dataset =='rexa-young_s'")
+#moore_a_dp_df = dp_df.query("dataset =='rexa-moore_a'")
+#robinson_h_dp_df = dp_df.query("dataset =='rexa-robinson_h'")
+mcguire_j_dp_df = dp_df.query("dataset =='rexa-mcguire_j'")
+
+
+#sns.lineplot(data=r8_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=ng20_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=jones_s_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=allen_d_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=young_s_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=moore_a_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=robinson_h_dp_df, x="#constraints",  y="dp", hue="method")
+sns.lineplot(data=mcguire_j_dp_df, x="#constraints",  y="dp", hue="method")
+
+plt.show()
