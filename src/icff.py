@@ -553,7 +553,7 @@ def gen_constraint(opt,
 
             # create constraint
             ff_constraint_cols = np.concatenate((pos_idxs, in_idxs, neg_idxs), axis=0)
-            ff_constraint_data = [1] * (pos_idxs.size + in_idxs.size)\
+            ff_constraint_data = [2] * pos_idxs.size + [1] * in_idxs.size\
                                  + [-1] * neg_idxs.size
             ff_constraint_rows = np.zeros_like(ff_constraint_cols)
             ff_constraint = coo_matrix(

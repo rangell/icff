@@ -16,9 +16,14 @@ def constraint_compatible_nodes(opt,
     node_raw_reps = sp.vstack([n.raw_rep for n in nodes])
     node_raw_reps_normd = get_tfidf_normd(node_raw_reps, raw_idf)
 
+    # remove "pos" features for placement only
+    Xi1 = sp.vstack(constraints)
+    Xi2 = Xi1.multiply(np.abs(Xi1) == 1)
+    Xi2.eliminate_zeros()
+
     overlap_scores = compat_func(
         node_raw_reps_normd,
-        sp.vstack(constraints),
+        Xi2,
         num_points if opt.super_compat_score else 1
     )
     
