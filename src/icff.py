@@ -460,7 +460,7 @@ def gen_constraint(opt,
         ).reshape(-1,)
         is_ent_subsets = feat_intersect == np.sum(ff_pred_ent)
         num_ent_subsets = np.sum(is_ent_subsets)
-        assert num_ent_subsets < 2
+        #assert num_ent_subsets < 2
 
         # get the tgt entity for this constraint
         tgt_ent_idx = np.argmax(feat_intersect)

@@ -1,5 +1,9 @@
+import sys
 import copy
 from functools import reduce
+
+
+sys.setrecursionlimit(5000)
 
 
 class TreeNode(object):
