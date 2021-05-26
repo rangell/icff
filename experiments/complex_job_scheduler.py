@@ -25,15 +25,22 @@ def get_run_id():
         run_id = len(expts) / 5
     return run_id
 
-top_details = 'Initial runs of ml_sl over all trimmed datasets'
+top_details = 'Initial runs of ml_sl over all rexa canopy datasets'
 
 hyperparameters = [
     [('seed',), ['27']],
-    [('data_file',), ['r8-test-stemmed.dataset.pkl',
-                      'r52-test-stemmed.dataset.pkl',
-                      'cade-test-stemmed.dataset.pkl',
-                      'webkb-test-stemmed.dataset.pkl',
-                      '20ng-test-stemmed.dataset.pkl']],
+    #[('data_file',), ['r8-test-stemmed.dataset.pkl',
+    #                  'r52-test-stemmed.dataset.pkl',
+    #                  'cade-test-stemmed.dataset.pkl',
+    #                  'webkb-test-stemmed.dataset.pkl',
+    #                  '20ng-test-stemmed.dataset.pkl']],
+    #[('data_file',), ['rexa-allen_d.pkl',
+    #                  'rexa-jones_s.pkl',
+    #                  'rexa-mcguire_j.pkl',
+    #                  'rexa-moore_a.pkl',
+    #                  'rexa-robinson_h.pkl',
+    #                  'rexa-young_s.pkl']],
+    [('data_file',), ['tgx.pkl']],
     #[('constraint_strength',), ['5']]
 ]
 
