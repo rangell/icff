@@ -35,6 +35,8 @@ python src/icff.py\
     --compat_func="raw"\
     --constraint_strength={constraint_strength}\
     --cluster_obj_reps="raw"\
-    --compat_agg="avg"
+    --compat_agg="avg"\
+    --strong_pos_out={strong_pos_out}\
+    --viable_placements_order={viable_placements_order}\
 
 popd

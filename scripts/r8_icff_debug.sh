@@ -6,13 +6,15 @@ conda activate icff
 python src/icff.py\
     --seed=27\
     --data_dir="data/real/"\
-    --data_file="r8-test-stemmed.dataset.trimmed.pkl"\
+    --data_file="r8-test-stemmed.dataset.pkl"\
     --cost_per_cluster=1e-3\
     --max_rounds=400\
-    --num_constraints_per_round=5\
+    --num_constraints_per_round=1\
     --sim_func='cosine'\
     --compat_func='raw'\
     --constraint_strength=5\
     --cluster_obj_reps='raw'\
     --compat_agg='avg'\
+    --strong_pos_out=True\
+    --viable_placements_order='high'\
     --debug

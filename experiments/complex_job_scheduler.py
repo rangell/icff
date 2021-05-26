@@ -29,6 +29,10 @@ top_details = 'Initial runs of ml_sl over all rexa canopy datasets'
 
 hyperparameters = [
     [('seed',), ['27']],
+    [('data_file',), ['r8-test-stemmed.dataset.pkl',]],
+    [('constraint_strength',), ['1', '3', '5', '10', '20']],
+    [('strong_pos_out',), ['True','False']],
+    [('viable_placements_order',), ['low','high']],
     #[('data_file',), ['r8-test-stemmed.dataset.pkl',
     #                  'r52-test-stemmed.dataset.pkl',
     #                  'cade-test-stemmed.dataset.pkl',
@@ -40,7 +44,7 @@ hyperparameters = [
     #                  'rexa-moore_a.pkl',
     #                  'rexa-robinson_h.pkl',
     #                  'rexa-young_s.pkl']],
-    [('data_file',), ['tgx.pkl']],
+    #[('data_file',), ['tgx.pkl']],
     #[('constraint_strength',), ['5']]
 ]
 
@@ -52,7 +56,7 @@ combinations = list(itertools.product(*value_hyperparameters))
 scripts = []
 
 for combo in combinations:
-    with open("ml_sl_grid_template.sh", 'r') as f:
+    with open("icff_grid_template.sh", 'r') as f:
         train_script = f.read()
 
     combo = {k[0]: v for (k, v) in zip(key_hyperparameters, combo)}

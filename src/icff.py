@@ -486,10 +486,14 @@ def gen_constraint(opt,
                         feat_freq_normd[tgt_ent_idx, pos_pred_domain]
                     )
                 )
+
+                _pos_size = 1
+                if opt.strong_pos_out:
+                    _pos_size=min(opt.constraint_strength, pos_pred_domain.size),
+
                 pos_idxs = np.random.choice(
                     pos_pred_domain,
-                    #size=min(opt.constraint_strength, pos_pred_domain.size),
-                    size=1,
+                    size=_pos_size,
                     replace=False,
                     p=pos_feat_dist
                 )
@@ -855,6 +859,10 @@ def get_opt():
                         help="number of rounds to generate feedback for")
     parser.add_argument('--num_constraints_per_round', type=int, default=1,
                         help="number of constraints to generate per round")
+
+    parser.add_argument('--strong_pos_out', type=bool, help="")
+    parser.add_argument('--viable_placements_order', type=str,
+                        choices=['low', 'high'], help="")
 
     opt = parser.parse_args()
 

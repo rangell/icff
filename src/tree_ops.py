@@ -37,7 +37,7 @@ def constraint_compatible_nodes(opt,
                         compatible_nodes
                     )
                 ),
-                key=lambda x: (x[0], -x[1].uid),
+                key=lambda x: (x[0], (1 if opt.viable_placements_order == 'high' else -1) * x[1].uid),
                 reverse=True
             )
         )
