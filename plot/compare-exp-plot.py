@@ -75,8 +75,11 @@ parsed_data = dict(parsed_data)
 dp_df = pd.DataFrame(
     parsed_data, columns=['dataset', 'method', '#constraints', 'dp']
 )
+#dp_df = pd.DataFrame(
+#    parsed_data, columns=['dataset', 'method', '#constraints', 'nmi']
+#)
 
-#r8_dp_df = dp_df.query("dataset == 'r8-test-stemmed.dataset'")
+r8_dp_df = dp_df.query("dataset == 'r8-test-stemmed.dataset'")
 #r52_dp_df = dp_df.query("dataset == 'r52-test-stemmed.dataset'")
 #webkb_dp_df = dp_df.query("dataset == 'webkb-test-stemmed.dataset'")
 #ng20_dp_df = dp_df.query("dataset == '20ng-test-stemmed.dataset'")
@@ -85,16 +88,16 @@ dp_df = pd.DataFrame(
 #young_s_dp_df = dp_df.query("dataset =='rexa-young_s'")
 #moore_a_dp_df = dp_df.query("dataset =='rexa-moore_a'")
 #robinson_h_dp_df = dp_df.query("dataset =='rexa-robinson_h'")
-mcguire_j_dp_df = dp_df.query("dataset =='rexa-mcguire_j'")
+#mcguire_j_dp_df = dp_df.query("dataset =='rexa-mcguire_j'")
 
 
-#sns.lineplot(data=r8_dp_df, x="#constraints",  y="dp", hue="method")
+sns.lineplot(data=r8_dp_df, x="#constraints",  y="dp", hue="method")
 #sns.lineplot(data=ng20_dp_df, x="#constraints",  y="dp", hue="method")
 #sns.lineplot(data=jones_s_dp_df, x="#constraints",  y="dp", hue="method")
 #sns.lineplot(data=allen_d_dp_df, x="#constraints",  y="dp", hue="method")
 #sns.lineplot(data=young_s_dp_df, x="#constraints",  y="dp", hue="method")
 #sns.lineplot(data=moore_a_dp_df, x="#constraints",  y="dp", hue="method")
 #sns.lineplot(data=robinson_h_dp_df, x="#constraints",  y="dp", hue="method")
-sns.lineplot(data=mcguire_j_dp_df, x="#constraints",  y="dp", hue="method")
+#sns.lineplot(data=mcguire_j_dp_df, x="#constraints",  y="dp", hue="method")
 
 plt.show()
